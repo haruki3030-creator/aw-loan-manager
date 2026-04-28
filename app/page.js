@@ -497,12 +497,21 @@ export default function Home() {
     if (!regText.trim()) { showToast("등기부 데이터가 없습니다"); return; }
     setAiParsing(true);
     try {
+      // 정규식으로 이미 추출한 정보를 AI에게 같이 보냄
+      const hint = regParsed ? {
+        owners: regParsed.owners?.map(o => `${o.name}(${o.role}, ${o.share})`).join(", ") || "",
+        ownership: regParsed.ownership || "",
+        mortgages: regParsed.mortgages?.map(m => `${m.holder}: 채권최고액 ${fmtW(m.maxAmount)}${m.date ? " (" + m.date + ")" : ""}`).join(", ") || "",
+        totalMax: regParsed.totalMax ? fmtW(regParsed.totalMax) : "",
+        risks: regParsed.risks?.join(", ") || "없음",
+      } : null;
+
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 25000);
       const res = await fetch("/api/registry", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: regText.slice(0, 4000), kb: merged.kb || "" }),
+        body: JSON.stringify({ text: regText.slice(0, 4000), kb: merged.kb || "", hint }),
         signal: controller.signal,
       });
       clearTimeout(timeout);
