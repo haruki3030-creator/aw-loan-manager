@@ -107,28 +107,34 @@ function parseKakao(raw) {
     }
   }
 
-  // KB/시세
+  // KB/시세 — "KB AI시세 15,400 15,600 15,700" 패턴 포함
   let kbBlock = "";
   for (let idx = 0; idx < lines.length; idx++) {
-    if (/^(시세|KB|kb|▶.*KB)/i.test(lines[idx])) { kbBlock = lines.slice(idx, idx + 3).join(" "); break; }
+    if (/^(시세|KB|kb|▶.*KB|KB\s*AI)/i.test(lines[idx])) { kbBlock = lines.slice(idx, idx + 3).join(" "); break; }
   }
   if (!kbBlock) kbBlock = joined;
   const kbParts = [];
   if (/KB\s*미등재|kb\s*미등재/i.test(kbBlock)) {
     kbParts.push("KB 미등재");
   } else {
-    const kbHa = kbBlock.match(/KB\s*하\s*([\d,.]+)\s*만?/i);
-    const kbIl = kbBlock.match(/KB\s*일\s*([\d,.]+)\s*만?/i);
-    const kbSang = kbBlock.match(/KB\s*상\s*([\d,.]+)\s*만?/i);
-    if (kbHa || kbIl || kbSang) {
-      const vals = [];
-      if (kbHa) vals.push("하 " + kbHa[1].replace(/,/g, "") + "만");
-      if (kbIl) vals.push("일 " + kbIl[1].replace(/,/g, "") + "만");
-      if (kbSang) vals.push("상 " + kbSang[1].replace(/,/g, "") + "만");
-      kbParts.push("KB " + vals.join(" / "));
+    // "KB AI시세 15,400 15,600 15,700" — 숫자 3개 나열 (하/일/상)
+    const kbAI = kbBlock.match(/KB\s*(?:AI\s*)?시세\s*([\d,.]+)\s+([\d,.]+)\s+([\d,.]+)/i);
+    if (kbAI) {
+      kbParts.push("KB " + kbAI[1].replace(/,/g, "") + "만 / " + kbAI[2].replace(/,/g, "") + "만 / " + kbAI[3].replace(/,/g, "") + "만");
     } else {
-      const kbSingle = kbBlock.match(/KB\s*[:\s]*\s*([\d,.]+)\s*(만|억)?/i);
-      if (kbSingle) { const num = kbSingle[1].replace(/,/g, ""); const unit = kbSingle[2] || (parseInt(num) > 100 ? "만" : ""); kbParts.push("KB " + num + unit); }
+      const kbHa = kbBlock.match(/KB\s*하\s*([\d,.]+)\s*만?/i);
+      const kbIl = kbBlock.match(/KB\s*일\s*([\d,.]+)\s*만?/i);
+      const kbSang = kbBlock.match(/KB\s*상\s*([\d,.]+)\s*만?/i);
+      if (kbHa || kbIl || kbSang) {
+        const vals = [];
+        if (kbHa) vals.push("하 " + kbHa[1].replace(/,/g, "") + "만");
+        if (kbIl) vals.push("일 " + kbIl[1].replace(/,/g, "") + "만");
+        if (kbSang) vals.push("상 " + kbSang[1].replace(/,/g, "") + "만");
+        kbParts.push("KB " + vals.join(" / "));
+      } else {
+        const kbSingle = kbBlock.match(/KB\s*[:\s]*\s*([\d,.]+)\s*(만|억)?/i);
+        if (kbSingle) { const num = kbSingle[1].replace(/,/g, ""); const unit = kbSingle[2] || (parseInt(num) > 100 ? "만" : ""); kbParts.push("KB " + num + unit); }
+      }
     }
   }
   const altSources = [
@@ -151,12 +157,25 @@ function parseKakao(raw) {
   const seniorNotes = [];
   for (const line of lines) {
     if (/^\d+\.\s*.*(금고|은행|캐피탈|저축|보험|새마을|신협|농협|수협|화재|생명|대부|해상)/.test(line)) { seniorLines.push(line.trim()); }
-    else if (/^(신한|국민|우리|하나|기업|농협|수협|SC|씨티|새마을|신협|현대|삼성|KB|카카오|토스|케이|캐피탈)\s*[:\s]+[\d,.]+/.test(line)) { seniorLines.push(line.trim()); }
+    else if (/^(신한|국민|우리|하나|기업|농협|수협|SC|씨티|새마을|신협|현대|삼성|KB|카카오|토스|케이|캐피탈|미래|OK|웰컴|JT|SBI|아프로|페퍼|OSB)\s*[:\s]*[\d,.]+/.test(line)) { seniorLines.push(line.trim()); }
+    // "미래대부 1,500" 같은 단순 패턴
+    else if (/^[가-힣A-Za-z]+(?:대부|캐피탈|저축|금고)\s+[\d,.]+/.test(line)) { seniorLines.push(line.trim()); }
     const noteM = line.match(/\(([가-힣\s]+(?:채무|대출|금거|가능|필요|예정|확인|부탁)[가-힣\s]*)\)/);
     if (noteM) seniorNotes.push(noteM[1].trim());
   }
   if (seniorLines.length > 0) d.seniorDetail = seniorLines.join("\n");
   if (seniorNotes.length > 0) { d.special = (d.special ? d.special + " / " : "") + seniorNotes.join(" / "); }
+
+  // 지분대출/공동소유 관련 요청
+  if (/지분\s*대출|공동\s*소유.*검토|지분.*검토/.test(joined)) {
+    const existing = d.special ? d.special + " / " : "";
+    d.special = existing + "지분대출 검토 요청";
+  }
+  // 배우자 공동소유
+  if (/배우자\s*공동/.test(joined)) {
+    const existing = d.special ? d.special + " / " : "";
+    d.special = existing + "배우자 공동소유";
+  }
 
   // 요청금액
   for (const line of lines) {
@@ -173,22 +192,44 @@ function parseKakao(raw) {
   if (!d.job) { const jm = joined.match(/(4대\s*직장인|개인사업자|자영업자?|직장인|회사원|공무원|프리랜서|무직|주부|일용직|법인대표)/); if (jm) d.job = jm[1]; }
 
   const salM = joined.match(/월\s*급여\s*([\d,]+)\s*만?/); if (salM) d.salary = salM[1].replace(/,/g, "") + "만";
-  const crM = joined.match(/(?:KCB|NICE|kcb|nice)\s*(\d{3,4})\s*(점|점수)?/);
-  if (crM) d.credit = (crM[0].match(/KCB|NICE|kcb|nice/)?.[0]?.toUpperCase() || "") + " " + crM[1] + (crM[2] || "점");
-  else { const crM3 = joined.match(/(\d+)\s*등급/); if (crM3) d.credit = crM3[1] + "등급"; }
+  const crM = joined.match(/(?:KCB|NICE|kcb|nice|나이스)\s*(\d{3,4})\s*(점|점수)?/);
+  if (crM) {
+    const src = crM[0].match(/KCB|NICE|kcb|nice|나이스/)?.[0] || "";
+    const srcLabel = /나이스|nice/i.test(src) ? "NICE" : src.toUpperCase();
+    d.credit = srcLabel + " " + crM[1] + (crM[2] || "점");
+  } else {
+    // "나이스 7등급" 또는 "NICE 7등급"
+    const crM2 = joined.match(/(?:KCB|NICE|나이스|kcb|nice)\s*(\d+)\s*등급/i);
+    if (crM2) {
+      const src2 = crM2[0].match(/KCB|NICE|나이스|kcb|nice/i)?.[0] || "";
+      const srcLabel2 = /나이스|nice/i.test(src2) ? "NICE" : src2.toUpperCase();
+      d.credit = srcLabel2 + " " + crM2[1] + "등급";
+    } else {
+      const crM3 = joined.match(/(\d+)\s*등급/);
+      if (crM3) d.credit = crM3[1] + "등급";
+    }
+  }
 
   if (/대환/.test(joined)) d.purpose = "대환";
   else if (/생활자금/.test(joined)) d.purpose = "생활자금";
   else if (/잔금/.test(joined)) d.purpose = "잔금";
 
-  const areaM = joined.match(/전용\s*([\d.]+)\s*㎡/);
-  if (areaM) notes.push("전용 " + areaM[1] + "㎡");
-  else { const areaM2 = joined.match(/(?:아파트|오피스텔|빌라)\s*([\d.]+)/); if (areaM2 && parseFloat(areaM2[1]) > 10 && parseFloat(areaM2[1]) < 300) notes.push("전용 " + areaM2[1] + "㎡"); }
+  // 면적: ㎡ 와 m² 둘 다 인식, 공급/전용 구분
+  const areaDouble = joined.match(/([\d.]+)\s*(?:㎡|m²)\s*\/\s*([\d.]+)\s*(?:㎡|m²)/);
+  if (areaDouble) {
+    notes.push("공급 " + areaDouble[1] + "㎡ / 전용 " + areaDouble[2] + "㎡");
+  } else {
+    const areaM = joined.match(/전용\s*([\d.]+)\s*(?:㎡|m²)/);
+    if (areaM) notes.push("전용 " + areaM[1] + "㎡");
+    else { const areaM2 = joined.match(/(?:아파트|오피스텔|빌라)\s*([\d.]+)/); if (areaM2 && parseFloat(areaM2[1]) > 10 && parseFloat(areaM2[1]) < 300) notes.push("전용 " + areaM2[1] + "㎡"); }
+  }
   const sedae = joined.match(/(\d+)\s*세대/); if (sedae) notes.push(sedae[1] + "세대");
   const silM = joined.match(/실거래[:\s]*([\d,.]+)\s*만/); if (silM) notes.push("실거래 " + silM[1].replace(/,/g, "") + "만");
   const bunM = joined.match(/분양가\s*([\d,.]+)\s*(만|억)/); if (bunM) notes.push("분양가 " + bunM[1] + bunM[2]);
   if (/신탁/.test(joined)) notes.push("신탁");
   if (/환매/.test(joined)) notes.push("환매특약");
+  const ageM = joined.match(/(\d+)\s*년차/);
+  if (ageM) notes.push(ageM[1] + "년차");
   const owM = joined.match(/소유권이전일?[:\s]*([\d년월일.\s]+)/); if (owM) notes.push("소유권이전 " + owM[1].trim());
 
   if (notes.length) d.special = (d.special ? d.special + " / " : "") + notes.join(" / ");
@@ -279,12 +320,25 @@ function mergeData(kakao, reg) {
   f.phone = kakao.phone || ""; f.job = kakao.job || ""; f.salary = kakao.salary || "";
   f.credit = kakao.credit || ""; f.purpose = kakao.purpose || ""; f.period = kakao.period || "";
   f.amount = kakao.amount || ""; f.loanType = kakao.loanType || "일반담보";
-  if (reg?.address && kakao.address && reg.address !== kakao.address) { f.address = kakao.address; f.addressRegistry = reg.address; }
-  else f.address = kakao.address || reg?.address || "";
+  // 주소: 건물명 있는 주소 우선, 둘 다 있으면 둘 다 표시
+  const hasBuildingName = (addr) => /[가-힣]+(?:빌|파크|캐슬|아파트|빌라|타워|하이츠|맨션|빌리지|시티|힐|프라자|하우스|리움|센트럴)/.test(addr || "");
+  if (reg?.address && kakao.address && reg.address !== kakao.address) {
+    // 건물명 있는 쪽이 메인
+    if (hasBuildingName(kakao.address) || !hasBuildingName(reg.address)) {
+      f.address = kakao.address;
+      f.addressRegistry = reg.address;
+    } else {
+      f.address = reg.address;
+      f.addressRegistry = kakao.address;
+    }
+  } else {
+    const addr = kakao.address || reg?.address || "";
+    f.address = addr;
+  }
   f.type = reg?.type ? normalizeType(reg.type) : kakao.type || "아파트";
   f.kb = kakao.kb || "";
   if (reg && reg.mortgages.length > 0) {
-    f.seniorDetail = reg.mortgages.map((m, i) => `${i + 1}. ${shortName(m.holder) || "불명"} — 채권최고액 ${fmtW(m.maxAmount)}${m.date ? " (" + m.date + ")" : ""}`).join("\n");
+    f.seniorDetail = reg.mortgages.map((m, i) => `${i + 1}. ${shortName(m.holder) || "불명"}: 채권최고액 ${fmtW(m.maxAmount)}${m.date ? " (" + m.date + ")" : ""}`).join("\n");
     f.senior = `채권최고액 합계 ${fmtW(reg.totalMax)}`;
     f.rank = reg.mortgages.length === 0 ? "1순위" : reg.mortgages.length === 1 ? "2순위" : "3순위";
   } else { f.seniorDetail = kakao.seniorDetail || ""; f.senior = kakao.senior || ""; f.rank = kakao.rank || "1순위"; }
@@ -302,27 +356,35 @@ function mergeData(kakao, reg) {
 }
 
 function toOutput(d) {
+  // 생년에서 주민번호 뒷자리 제거 (910516-1 → 910516)
+  const birth = d.birth ? d.birth.replace(/[-]\d*$/, "") : "";
+
   let o = "◈ 올웨더파트너스대부\n\n";
   o += `[ ${d.loanType} / ${d.type} / ${d.rank} ]\n\n`;
   o += `▶ 신청인\n`;
-  if (d.name) o += `  성명: ${d.name}\n`; if (d.birth) o += `  생년: ${d.birth}\n`;
-  if (d.phone) o += `  연락처: ${d.phone}\n`; if (d.job) o += `  직업: ${d.job}\n`;
-  if (d.salary) o += `  월소득: ${d.salary}\n`; if (d.credit) o += `  신용: ${d.credit}\n`;
+  if (d.name) o += `성명: ${d.name}\n`;
+  if (birth) o += `생년: ${birth}\n`;
+  if (d.phone) o += `연락처: ${d.phone}\n`;
+  if (d.job) o += `직업: ${d.job}\n`;
+  if (d.salary) o += `월소득: ${d.salary}\n`;
+  if (d.credit) o += `신용: ${d.credit}\n`;
   o += `\n▶ 담보물\n`;
-  if (d.address) o += `  주소: ${d.address}\n`;
-  if (d.addressRegistry && d.addressRegistry !== d.address) o += `  지번: ${d.addressRegistry}\n`;
-  if (d.kb) o += `  시세: ${d.kb}\n`;
+  if (d.address) o += `주소: ${d.address}\n`;
+  if (d.addressRegistry && d.addressRegistry !== d.address) o += `지번: ${d.addressRegistry}\n`;
+  if (d.kb) o += `시세: ${d.kb}\n`;
   o += `\n`;
   if (d.special || d.note) {
     o += `▶ 특이사항\n`;
-    if (d.special) d.special.split(/\s*\/\s*/).forEach(item => { if (item.trim()) o += `  * ${item.trim()}\n`; });
-    if (d.note) o += `  * ${d.note}\n`;
+    if (d.special) d.special.split(/\s*\/\s*/).forEach(item => { if (item.trim()) o += `* ${item.trim()}\n`; });
+    if (d.note) o += `* ${d.note}\n`;
     o += `\n`;
   }
   o += `▶ 대출현황\n`;
-  if (d.seniorDetail) { d.seniorDetail.split("\n").forEach(l => { o += `  ${l}\n`; }); const mc = (d.seniorDetail.match(/^\s*\d+\./gm) || []).length; if (mc >= 2 && d.senior) o += `  :: 합계 ${d.senior}\n`; }
-  else if (d.senior) o += `  선순위: ${d.senior}\n`;
-  if (d.amount) o += `  요청: ${d.amount}\n`; if (d.purpose) o += `  용도: ${d.purpose}\n`; if (d.period) o += `  기간: ${d.period}\n`;
+  if (d.seniorDetail) { d.seniorDetail.split("\n").forEach(l => { o += `${l}\n`; }); const mc = (d.seniorDetail.match(/^\s*\d+\./gm) || []).length; if (mc >= 2 && d.senior) o += `:: 합계 ${d.senior}\n`; }
+  else if (d.senior) o += `선순위: ${d.senior}\n`;
+  if (d.amount) o += `요청: ${d.amount}\n`;
+  if (d.purpose) o += `용도: ${d.purpose}\n`;
+  if (d.period) o += `기간: ${d.period}\n`;
   o += `\n㈜올웨더파트너스대부\n☎ 010-7485-3357`;
   return o;
 }
@@ -380,8 +442,18 @@ export default function Home() {
     if (!kakaoText.trim() && !regText.trim() && !regFile) return;
     setAiParsing(true);
     try {
-      const res = await fetch("/api/ai", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: kakaoText.slice(0, 3000) }) });
-      const data = await res.json();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 20000);
+      const res = await fetch("/api/ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: kakaoText.slice(0, 2000) }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch { throw new Error("응답 파싱 실패"); }
       if (data.error) throw new Error(data.error);
       const parsed = data.result;
       const m = { ...EMPTY };
@@ -393,7 +465,8 @@ export default function Home() {
       showToast("AI 분석 완료!");
     } catch (err) {
       console.error(err); handleAnalyze();
-      showToast("AI 실패 → 정규식 (" + err.message.slice(0, 40) + ")");
+      const msg = err.name === "AbortError" ? "타임아웃" : err.message.slice(0, 40);
+      showToast("AI 실패 → 정규식 (" + msg + ")");
     } finally { setAiParsing(false); }
   }
 
@@ -402,12 +475,24 @@ export default function Home() {
     if (!regText.trim()) { showToast("등기부 데이터가 없습니다"); return; }
     setAiParsing(true);
     try {
-      const res = await fetch("/api/registry", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: regText.slice(0, 5000), kb: merged.kb || "" }) });
-      const data = await res.json();
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 25000);
+      const res = await fetch("/api/registry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: regText.slice(0, 4000), kb: merged.kb || "" }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch { throw new Error("응답 파싱 실패"); }
       if (data.error) throw new Error(data.error);
       setAnalysis(data.result); showToast("권리분석 완료!");
-    } catch (err) { setAnalysis("❌ 분석 실패: " + err.message); showToast("권리분석 실패"); }
-    finally { setAiParsing(false); }
+    } catch (err) {
+      const msg = err.name === "AbortError" ? "타임아웃 — 잠시 후 다시 시도하세요" : err.message;
+      setAnalysis("❌ 분석 실패: " + msg); showToast("권리분석 실패");
+    } finally { setAiParsing(false); }
   }
 
   function handleGenerate() { const out = toOutput(merged); setOutput(out); setMode("output"); }
