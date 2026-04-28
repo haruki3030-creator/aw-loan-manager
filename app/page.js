@@ -320,20 +320,39 @@ function mergeData(kakao, reg) {
   f.phone = kakao.phone || ""; f.job = kakao.job || ""; f.salary = kakao.salary || "";
   f.credit = kakao.credit || ""; f.purpose = kakao.purpose || ""; f.period = kakao.period || "";
   f.amount = kakao.amount || ""; f.loanType = kakao.loanType || "일반담보";
-  // 주소: 건물명 있는 주소 우선, 둘 다 있으면 둘 다 표시
-  const hasBuildingName = (addr) => /[가-힣]+(?:빌|파크|캐슬|아파트|빌라|타워|하이츠|맨션|빌리지|시티|힐|프라자|하우스|리움|센트럴)/.test(addr || "");
+  // 주소 규칙:
+  // 도로명 + 지번 → 둘 다 표시
+  // 둘 다 지번 → 건물명 있는 것 하나만
+  // 둘 다 도로명 → 하나만
+  const isDoroName = (addr) => /[가-힣]+(?:로|길)\s*\d/.test(addr || "");
+  const hasBuildingName = (addr) => /[가-힣]+(?:빌|파크|캐슬|아파트|빌라|타워|하이츠|맨션|빌리지|시티|힐|프라자|하우스|리움|센트럴|메트로|자이|래미안|아이파크|푸르지오|엘리움|롯데|SK|GS)/.test(addr || "");
+
   if (reg?.address && kakao.address && reg.address !== kakao.address) {
-    // 건물명 있는 쪽이 메인
-    if (hasBuildingName(kakao.address) || !hasBuildingName(reg.address)) {
-      f.address = kakao.address;
-      f.addressRegistry = reg.address;
+    const kakaoIsDoro = isDoroName(kakao.address);
+    const regIsDoro = isDoroName(reg.address);
+
+    if (kakaoIsDoro !== regIsDoro) {
+      // 하나는 도로명, 하나는 지번 → 둘 다 표시
+      if (kakaoIsDoro) {
+        f.address = kakao.address;
+        f.addressRegistry = reg.address;
+      } else {
+        f.address = reg.address;
+        f.addressRegistry = kakao.address;
+      }
     } else {
-      f.address = reg.address;
-      f.addressRegistry = kakao.address;
+      // 둘 다 지번 또는 둘 다 도로명 → 건물명 있는 것 하나만
+      if (hasBuildingName(kakao.address)) {
+        f.address = kakao.address;
+      } else if (hasBuildingName(reg.address)) {
+        f.address = reg.address;
+      } else {
+        f.address = kakao.address; // 둘 다 건물명 없으면 카톡 우선
+      }
+      f.addressRegistry = ""; // 중복이니 안 보여줌
     }
   } else {
-    const addr = kakao.address || reg?.address || "";
-    f.address = addr;
+    f.address = kakao.address || reg?.address || "";
   }
   f.type = reg?.type ? normalizeType(reg.type) : kakao.type || "아파트";
   f.kb = kakao.kb || "";
@@ -370,7 +389,10 @@ function toOutput(d) {
   if (d.credit) o += `신용: ${d.credit}\n`;
   o += `\n▶ 담보물\n`;
   if (d.address) o += `주소: ${d.address}\n`;
-  if (d.addressRegistry && d.addressRegistry !== d.address) o += `지번: ${d.addressRegistry}\n`;
+  if (d.addressRegistry) {
+    const regLabel = /[가-힣]+(?:로|길)\s*\d/.test(d.addressRegistry) ? "도로명" : "지번";
+    o += `${regLabel}: ${d.addressRegistry}\n`;
+  }
   if (d.kb) o += `시세: ${d.kb}\n`;
   o += `\n`;
   if (d.special || d.note) {
