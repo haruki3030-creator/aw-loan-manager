@@ -25,7 +25,7 @@ function findCancelledNumbers(text) {
 
 export async function POST(req) {
   try {
-    const { text, kb } = await req.json();
+    const { text, kb, hint } = await req.json();
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return NextResponse.json({ error: "GEMINI_API_KEY 미설정" }, { status: 500 });
@@ -34,8 +34,18 @@ export async function POST(req) {
     const summary = extractSummary(text);
     const cancelledNums = findCancelledNumbers(text);
     const cancelledInfo = cancelledNums.size > 0
-      ? `\n참고: 순위번호 ${[...cancelledNums].join(", ")}번은 말소된 항목. 위험에서 제외해.`
+      ? `\n말소된 순위번호: ${[...cancelledNums].join(", ")}번. 위험에서 제외.`
       : "";
+
+    // 정규식으로 이미 추출한 정보
+    let hintBlock = "";
+    if (hint) {
+      hintBlock = `\n\n사전 분석 결과 (참고해서 분석해):
+- 소유자: ${hint.owners || "미확인"} (${hint.ownership || ""})
+- 유효 근저당: ${hint.mortgages || "없음"}
+- 근저당 합계: ${hint.totalMax || "없음"}
+- 위험 플래그: ${hint.risks || "없음"}`;
+    }
 
     const analysisText = summary || text;
 
@@ -46,7 +56,7 @@ export async function POST(req) {
 2. "기록사항 없음"이면 위험요소 없음.
 3. 소유자 본인이 채권자인 가처분은 위험 아님.
 4. 금액은 만원 단위. 예: 319,200,000원 → 3억 1,920만원
-5. 근저당권자 이름 포함.${cancelledInfo}
+5. 근저당권자 이름 포함.${cancelledInfo}${hintBlock}
 
 LTV 기준:
 - 70% 이하 → ✅ 안전
@@ -56,7 +66,7 @@ LTV 기준:
 
 형식:
 📋 등기부 분석 결과
-소유자: (이름, 단독/공동)
+소유자: (이름, 단독/공동소유 명시. 공동이면 지분 포함)
 ${kb ? `시세: ${kb}` : ""}
 ⚠️ 위험/특이사항: (유효 위험만. 없으면 "없음")
 🏦 유효 근저당: (근저당권자: 채권최고액)${kb ? ` LTV 포함` : ""}
