@@ -2,37 +2,38 @@ import { NextResponse } from "next/server";
 
 export async function POST(req) {
   try {
-    const { text } = await req.json();
+    const { text, kb } = await req.json();
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
-      return NextResponse.json({ error: "GEMINI_API_KEY 환경변수가 설정되지 않았습니다" }, { status: 500 });
+      return NextResponse.json({ error: "GEMINI_API_KEY 미설정" }, { status: 500 });
     }
 
-    const prompt = `대부업 물건 접수 카톡 메시지에서 정보를 추출해. JSON만 반환해. 마크다운 코드블록 쓰지 마. 순수 JSON만.
+    const prompt = `너는 대부업 등기부등본 권리분석 전문가야. 아래 등기부 텍스트를 분석해서 실무적 리포트를 작성해.
 
-{
-  "type": "아파트/오피스텔/빌라·다세대/단독·다가구/상가/토지/기타 중 하나",
-  "rank": "1순위/2순위/3순위",
-  "loanType": "일반담보/분양담보/후순위/동시설정/대환/매매잔금/기타 중 하나",
-  "name": "이름/성명/분양자/차주",
-  "birth": "생년월일 (주민번호 앞자리-뒷자리 첫숫자 포함)",
-  "phone": "연락처",
-  "address": "담보물 주소 (최대한 상세하게)",
-  "kb": "KB시세 또는 대체시세. KB 미등재 시 하우스머치/부동산114 등 포함. 예: KB 51000만, KB 미등재 / 하우스머치 43600만",
-  "senior": "선순위 합계 요약",
-  "seniorDetail": "금융사별 기대출 상세. 채권최고액/대출잔액 구분. 여러건이면 줄바꿈",
-  "amount": "차주가 원하는 필요자금/요청금액. '최대 요청', '2순위 가능사 확인 부탁' 같은 텍스트도 포함",
-  "job": "직업 (4대 직장인, 개인사업자 등 구체적으로)",
-  "salary": "월소득/급여",
-  "credit": "신용점수 (KCB/NICE 구분 포함)",
-  "purpose": "자금용도 (대환, 생활자금, 잔금 등)",
-  "period": "이용기간",
-  "special": "특이사항 (대환사유, 괄호 안 메모, 중요 맥락)",
-  "note": "부가정보 (전용면적, 세대수, 층수, 분양가, 실거래가, 신탁, 환매특약 등)"
-}
-없는 항목은 빈 문자열 ""로.
+중요: 말소된 항목과 유효한 항목을 정확히 구분해. 말소기준등기 이후 말소된 가압류/경매 등은 "말소됨"으로 표시하고 위험요소에서 제외해.
 
-카톡 메시지:
+분석 항목:
+
+1. [갑구] 소유권 현황
+   - 현재 소유자 (공동소유면 지분 포함)
+   - 소유권 이전 경위 (매매/분양/판결 등)
+   - 가압류/가처분/경매/압류 각각: 채권자, 말소 여부, 현재 의미
+   - 위험도: ✅ 안전 / ⚠️ 주의 / 🚨 위험
+
+2. [을구] 근저당 현황
+   - 근저당권자별: 채권최고액, 설정일
+   - 말소된 근저당은 제외
+   - 유효 선순위 합계
+   ${kb ? `- KB시세 ${kb} 기준 LTV 계산` : ""}
+
+3. [종합 판단]
+   - 후순위 담보 취급 가능 여부
+   - 주의사항
+   - 권고사항 (말소촉탁 필요 여부 등)
+
+간결하고 실무적으로 작성해. 이모지 활용해서 한눈에 보이게.
+
+등기부등본:
 ${text}`;
 
     const models = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"];
@@ -47,7 +48,7 @@ ${text}`;
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               contents: [{ parts: [{ text: prompt }] }],
-              generationConfig: { temperature: 0.1, maxOutputTokens: 2000 },
+              generationConfig: { temperature: 0.1, maxOutputTokens: 3000 },
             }),
           }
         );
@@ -66,14 +67,7 @@ ${text}`;
           continue;
         }
 
-        const cleaned = aiText.replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-        const jsonM = cleaned.match(/\{[\s\S]*\}/);
-        if (!jsonM) {
-          return NextResponse.json({ error: "JSON 추출 실패", raw: aiText.slice(0, 300) }, { status: 500 });
-        }
-
-        const parsed = JSON.parse(jsonM[0]);
-        return NextResponse.json({ result: parsed });
+        return NextResponse.json({ result: aiText });
 
       } catch (err) {
         lastErr = `${model}: ${err.message}`;
