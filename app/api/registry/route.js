@@ -37,11 +37,13 @@ export async function POST(req) {
       ? `\n말소된 순위번호: ${[...cancelledNums].join(", ")}번. 위험에서 제외.`
       : "";
 
-    // 정규식으로 이미 추출한 정보
     let hintBlock = "";
     if (hint) {
-      hintBlock = `\n\n사전 분석 결과 (참고해서 분석해):
+      hintBlock = `\n\n사전 분석 결과 (이 정보를 반드시 참고해서 분석해):
 - 소유자: ${hint.owners || "미확인"} (${hint.ownership || ""})
+- 전용면적: ${hint.area || "미확인"}
+- 총층수: ${hint.totalFloors || "미확인"}
+- 해당층: ${hint.unitFloor || "미확인"}
 - 유효 근저당: ${hint.mortgages || "없음"}
 - 근저당 합계: ${hint.totalMax || "없음"}
 - 위험 플래그: ${hint.risks || "없음"}`;
@@ -66,7 +68,8 @@ LTV 기준:
 
 형식:
 📋 등기부 분석 결과
-소유자: (이름, 단독/공동소유 명시. 공동이면 지분 포함)
+소유자: (이름, 단독/공동 + 지분)
+물건정보: (전용면적, 총층수/해당층)
 ${kb ? `시세: ${kb}` : ""}
 ⚠️ 위험/특이사항: (유효 위험만. 없으면 "없음")
 🏦 유효 근저당: (근저당권자: 채권최고액)${kb ? ` LTV 포함` : ""}
