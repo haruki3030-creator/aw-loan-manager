@@ -834,15 +834,21 @@ export default function Home() {
 
   // 정규식만 (빠른 분석)
   function handleQuickParse() {
+    if (!kakaoText.trim() && !regText.trim()) { showToast("카톡 또는 등기부 입력 필요"); return; }
+    // 이전 분석 결과 초기화
+    setPriceData(null); setAnalysis(""); setAiModel("");
     const kp = kakaoText.trim() ? parseKakao(kakaoText) : { ...EMPTY, seniorLoans: [], replacementLoans: [], seniorTotal: { maxAmount: null, estimatedBalance: null }, replacementTotal: { maxAmount: null, estimatedBalance: null }, owners: [], mortgages: [], risks: [] };
-    if (regText.trim() && !regParsed) { const rp = parseRegistry(regText); setRegParsed(rp); }
-    const m = mergeData(kp, regParsed); setMerged(m); setMode("review");
-    showToast("빠른 분석 완료!");
+    let rp = regParsed;
+    if (regText.trim() && !regParsed) { rp = parseRegistry(regText); setRegParsed(rp); }
+    const m = mergeData(kp, rp); setMerged(m); setMode("review");
+    showToast(`빠른 분석 완료${kp.name ? " — " + kp.name : ""}`);
   }
 
   // AI 메인 파서
   async function handleAIParse() {
-    if (!kakaoText.trim() && !regText.trim() && !regFile) return;
+    if (!kakaoText.trim() && !regText.trim() && !regFile) { showToast("카톡 또는 등기부 입력 필요"); return; }
+    // 이전 분석 결과 초기화
+    setPriceData(null); setAnalysis(""); setAiModel("");
     setAiParsing(true);
     try {
       // 등기부 정규식 먼저
@@ -967,7 +973,7 @@ export default function Home() {
   function handleCopy() {
     try { navigator.clipboard?.writeText(output).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); } catch { showToast("복사 실패"); }
   }
-  function handleReset() { setKakaoText(""); setRegText(""); setRegFile(null); setRegParsed(null); setMerged({ ...EMPTY, seniorLoans: [], replacementLoans: [], seniorTotal: { maxAmount: null, estimatedBalance: null }, replacementTotal: { maxAmount: null, estimatedBalance: null }, owners: [], mortgages: [], risks: [] }); setOutput(""); setAnalysis(""); setAiModel(""); setMode("input"); }
+  function handleReset() { setKakaoText(""); setRegText(""); setRegFile(null); setRegParsed(null); setMerged({ ...EMPTY, seniorLoans: [], replacementLoans: [], seniorTotal: { maxAmount: null, estimatedBalance: null }, replacementTotal: { maxAmount: null, estimatedBalance: null }, owners: [], mortgages: [], risks: [] }); setOutput(""); setAnalysis(""); setAiModel(""); setPriceData(null); setMode("input"); if (fileRef.current) fileRef.current.value = ""; }
   const set = (k) => (e) => setMerged({ ...merged, [k]: e.target.value });
   const TYPES = ["아파트", "빌라/다세대", "오피스텔", "단독/다가구", "상가", "토지", "기타"];
   const RANKS = ["1순위", "2순위", "3순위"];
