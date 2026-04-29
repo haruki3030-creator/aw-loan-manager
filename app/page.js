@@ -810,6 +810,8 @@ export default function Home() {
   const [aiModel, setAiModel] = useState("");
   const [priceData, setPriceData] = useState(null);
   const [priceLoading, setPriceLoading] = useState(false);
+  const [naverData, setNaverData] = useState(null);
+  const [naverLoading, setNaverLoading] = useState(false);
   const fileRef = useRef(null);
   const [bulkText, setBulkText] = useState("");
   const [bulkResults, setBulkResults] = useState(null);
@@ -1087,6 +1089,33 @@ export default function Home() {
     }
   }
 
+  async function fetchNaverPrice(address) {
+    const aptHint = extractAptName(address);
+    if (!aptHint) { showToast("단지명 추출 실패 — 주소 확인"); return; }
+    const targetArea = parseArea(merged.area);
+    setNaverLoading(true);
+    try {
+      const res = await fetch("/api/naver-price", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keyword: aptHint, targetArea }),
+      });
+      const data = await res.json();
+      if (data.error) { showToast("네이버 호가 실패: " + data.error); return; }
+      setNaverData(data);
+      const stats = data.stats;
+      if (stats) {
+        showToast(`네이버 호가 ${stats.count}건 / 평균 ${(stats.avg/10000).toFixed(2)}억`);
+      } else {
+        showToast(`매물 ${data.totalArticles}건 — 같은 면적 0건`);
+      }
+    } catch (err) {
+      showToast("네이버 호가 실패: " + err.message);
+    } finally {
+      setNaverLoading(false);
+    }
+  }
+
   // LTV 계산
   const ltv = calcLTV(merged);
 
@@ -1234,16 +1263,85 @@ export default function Home() {
           {merged.addressRegistry && <div style={s.fieldGroup}><label style={s.label}>지번 <span style={s.sourceTag("reg")}>등기부</span></label><input style={{ ...s.input, fontSize: 12, color: textMuted }} value={merged.addressRegistry} onChange={set("addressRegistry")} /></div>}
           <div style={s.fieldGroup}><label style={s.label}>시세</label><input style={s.input} value={merged.kb} onChange={set("kb")} /></div>
 
-          {/* 실거래가 자동조회 */}
-          <div style={{ marginBottom: 16 }}>
+          {/* 시세 조회 버튼 2개 */}
+          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
             <button
-              style={{ width: "100%", padding: "10px", background: "rgba(100,160,255,0.08)", border: "1px solid rgba(100,160,255,0.25)", borderRadius: 8, color: "#7ab3ff", fontSize: 13, fontWeight: 600, cursor: "pointer", opacity: priceLoading ? 0.5 : 1 }}
+              style={{ flex: 1, padding: "10px", background: "rgba(100,160,255,0.08)", border: "1px solid rgba(100,160,255,0.25)", borderRadius: 8, color: "#7ab3ff", fontSize: 12, fontWeight: 600, cursor: "pointer", opacity: priceLoading ? 0.5 : 1 }}
               onClick={() => fetchPrice(merged.address || merged.addressRegistry)}
               disabled={priceLoading}
             >
-              {priceLoading ? "⟳ 조회 중..." : "🏠 실거래가 자동조회 (국토부)"}
+              {priceLoading ? "⟳" : "🏠 실거래가 (국토부)"}
             </button>
+            <button
+              style={{ flex: 1, padding: "10px", background: "rgba(60,200,80,0.08)", border: "1px solid rgba(60,200,80,0.3)", borderRadius: 8, color: "#7fdb7f", fontSize: 12, fontWeight: 600, cursor: "pointer", opacity: naverLoading ? 0.5 : 1 }}
+              onClick={() => fetchNaverPrice(merged.address || merged.addressRegistry)}
+              disabled={naverLoading}
+            >
+              {naverLoading ? "⟳" : "📱 네이버 호가"}
+            </button>
+          </div>
 
+          {/* 네이버 호가 결과 */}
+          {naverData && (
+            <div style={{ background: "rgba(60,200,80,0.06)", border: "2px solid rgba(60,200,80,0.3)", borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
+              <div style={{ fontSize: 12, color: "#7fdb7f", fontWeight: 700, marginBottom: 6 }}>
+                📱 네이버 호가 — {naverData.complex?.name || ""}
+              </div>
+              {naverData.stats ? (<>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <div style={{ fontSize: 12 }}>
+                    <span style={{ color: textMuted }}>매물 <span style={{ color: "#e0dcd0", fontWeight: 700 }}>{naverData.stats.count}건</span></span>
+                    <span style={{ color: textMuted, marginLeft: 10 }}>최저 <span style={{ color: "#7fdb7f", fontWeight: 700 }}>{(naverData.stats.min/10000).toFixed(2)}억</span></span>
+                    <span style={{ color: textMuted, marginLeft: 10 }}>평균 <span style={{ color: "#7fdb7f", fontWeight: 700 }}>{(naverData.stats.avg/10000).toFixed(2)}억</span></span>
+                    <span style={{ color: textMuted, marginLeft: 10 }}>최고 <span style={{ color: "#7fdb7f", fontWeight: 700 }}>{(naverData.stats.max/10000).toFixed(2)}억</span></span>
+                  </div>
+                  <button
+                    style={{ padding: "3px 10px", background: "#7fdb7f", border: "none", borderRadius: 4, color: navy, fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+                    onClick={() => { setMerged({ ...merged, kb: String(naverData.stats.min), actualPrice: naverData.stats.min }); showToast("최저호가 적용"); }}
+                  >최저 적용</button>
+                </div>
+                {/* 실거래가 vs 호가 갭 */}
+                {priceData?.matched?.length > 0 && (() => {
+                  const realPrices = priceData.matched.filter(x => !x.cancel).map(x => parseInt((x.amount||"0").replace(/,/g,""))||0).filter(x => x > 0);
+                  if (realPrices.length === 0) return null;
+                  const realAvg = Math.round(realPrices.reduce((a,b) => a+b, 0) / realPrices.length);
+                  const gap = naverData.stats.avg - realAvg;
+                  const gapPct = ((gap / realAvg) * 100).toFixed(1);
+                  return (
+                    <div style={{ fontSize: 11, color: textMuted, marginBottom: 6, paddingTop: 6, borderTop: "1px solid rgba(60,200,80,0.15)" }}>
+                      실거래 평균 <span style={{ color: "#7ab3ff" }}>{(realAvg/10000).toFixed(2)}억</span> vs 호가 평균 <span style={{ color: "#7fdb7f" }}>{(naverData.stats.avg/10000).toFixed(2)}억</span> →
+                      <span style={{ color: gap > 0 ? "#ffb84d" : "#7fdb7f", fontWeight: 700, marginLeft: 4 }}>
+                        {gap > 0 ? "+" : ""}{(gap/10000).toFixed(2)}억 ({gapPct}%)
+                      </span>
+                    </div>
+                  );
+                })()}
+                <div style={{ maxHeight: 200, overflowY: "auto", borderTop: "1px solid rgba(60,200,80,0.15)", paddingTop: 6 }}>
+                  {naverData.items.slice(0, 15).map((item, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "5px 4px", borderBottom: "1px solid rgba(255,255,255,0.05)", fontSize: 11 }}>
+                      <div style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        <span style={{ color: textMuted }}>{item.areaExclu}㎡ {item.floor}</span>
+                        {item.feature && <span style={{ color: textMuted, marginLeft: 6, fontSize: 10 }}>· {item.feature.slice(0, 25)}</span>}
+                      </div>
+                      <span style={{ color: "#7fdb7f", fontWeight: 700, minWidth: 70, textAlign: "right" }}>{item.priceText}</span>
+                    </div>
+                  ))}
+                </div>
+              </>) : (
+                <div style={{ fontSize: 12, color: "#ff9b9b" }}>
+                  ⚠️ 같은 면적 매물 없음 (총 {naverData.totalArticles}건 매물 중)
+                </div>
+              )}
+              {naverData.candidates && naverData.candidates.length > 1 && (
+                <div style={{ fontSize: 10, color: textMuted, marginTop: 6 }}>
+                  ※ 동명이단지 가능성: {naverData.candidates.slice(0, 3).map(c => c.name).join(", ")}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 실거래가 결과 */}
+          <div style={{ marginBottom: 16 }}>
             {priceData && (<>
               <div style={{ fontSize: 11, color: textMuted, marginTop: 6, marginBottom: 8 }}>
                 📍 {priceData.region} · 최근 6개월 {priceData.items.length}건{priceData.aptHint ? ` · 단지: ${priceData.aptHint}` : ""}{priceData.targetArea ? ` · 기준 ${priceData.targetArea}㎡` : ""}
