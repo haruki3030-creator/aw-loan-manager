@@ -859,7 +859,7 @@ export default function Home() {
       }
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 9500);
+      const timeout = setTimeout(() => controller.abort(), 28000);
       const res = await fetch("/api/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -932,7 +932,7 @@ export default function Home() {
       const slimText = summaryIdx > -1 ? regText.slice(summaryIdx, summaryIdx + 1500) : regText.slice(0, 800);
 
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 9000);
+      const timeout = setTimeout(() => controller.abort(), 28000);
       const res = await fetch("/api/registry", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
