@@ -562,23 +562,58 @@ export default function Home() {
       for (const k of Object.keys(EMPTY)) { if (parsed[k] && parsed[k] !== "") m[k] = String(parsed[k]); }
       if (/빌라|다세대/.test(m.type)) m.type = "빌라/다세대";
       if (/단독|다가구/.test(m.type)) m.type = "단독/다가구";
-      // AI 결과 정규화
-      if (m.salary && !/만|원/.test(m.salary)) m.salary = m.salary + "만";
-      if (m.credit && !/점|등급/.test(m.credit)) {
-        if (/\d{3,4}$/.test(m.credit)) m.credit = m.credit + "점";
-        else if (/\d{1,2}$/.test(m.credit)) m.credit = m.credit + "등급";
-      }
-      if (m.amount && /^\d+$/.test(m.amount) && parseInt(m.amount) > 100) m.amount = m.amount + "만";
-      // 시세와 요청 혼동 체크: 시세 숫자가 요청으로 들어간 경우
-      if (m.kb && m.amount && m.kb.replace(/[^\d]/g, "") === m.amount.replace(/[^\d]/g, "")) m.amount = "";
-      // AI가 못 잡은 빈 값을 정규식으로 보충
+
+      // 1단계: AI가 못 잡은 빈 값을 정규식으로 보충
       if (kakaoText.trim()) {
         const regex = parseKakao(kakaoText);
         for (const k of Object.keys(EMPTY)) {
           if (!m[k] && regex[k]) m[k] = regex[k];
         }
+        // 신용에 KCB/NICE 소스가 빠졌으면 정규식 값으로 교체
+        if (m.credit && !/KCB|NICE|나이스/i.test(m.credit) && regex.credit && /KCB|NICE/i.test(regex.credit)) {
+          m.credit = regex.credit;
+        }
       }
+
+      // 2단계: 단위 정규화
+      if (m.salary && !/만|원/.test(m.salary)) m.salary = m.salary + "만";
+      if (m.credit && !/점|등급/.test(m.credit)) {
+        if (/\d{3,4}$/.test(m.credit)) m.credit = m.credit + "점";
+        else if (/\d{1,2}$/.test(m.credit)) m.credit = m.credit + "등급";
+      }
+
+      // 3단계: 잘못된 값 정리
+      // 연락처가 전화번호가 아닌 경우 제거 ("-1" 같은 오탐)
+      if (m.phone && !/^01\d/.test(m.phone.replace(/[-\s]/g, ""))) m.phone = "";
+      // 생년에서 주민번호 뒷자리 제거 (출력 시가 아니라 여기서)
+      if (m.birth) m.birth = m.birth.replace(/[-]\d*$/, "");
+
+      // 4단계: 시세와 요청 혼동 체크 (보충 후에 실행)
+      if (m.kb && m.amount) {
+        const kbDigits = m.kb.replace(/[^\d]/g, "");
+        const amtDigits = m.amount.replace(/[^\d]/g, "");
+        if (kbDigits && amtDigits && kbDigits === amtDigits) m.amount = "";
+      }
+      // 요청이 비었는데 "추가 한도 부탁" 같은 텍스트 있으면 채움
+      if (!m.amount && /추가.*한도|추가.*부탁/.test(kakaoText)) m.amount = "추가 한도 부탁드립니다";
+      if (!m.amount && /가능사.*확인|확인.*부탁/.test(kakaoText)) {
+        const reqM = kakaoText.match(/((?:\d순위\s*)?가능사?\s*확인\s*부탁[가-힣]*)/);
+        if (reqM) m.amount = reqM[1];
+      }
+
       setKakaoParsed(m);
+      // 5단계: 특이사항 정리 — 기대출/요청이 이미 다른 필드에 있으면 특이사항에서 제거
+      if (m.special) {
+        const cleanItems = m.special.split(/\s*\/\s*/).filter(item => {
+          if (!item.trim()) return false;
+          // 기대출 줄 제거 (금융사명 + 숫자)
+          if (/^(신한|국민|우리|하나|기업|농협|현대|삼성|새마을|신협|미래|OK|캐피탈|해상)[\s가-힣]*[-:]\s*[\d,.]+/.test(item)) return false;
+          // "추가 한도 부탁" 이미 요청에 있으면 제거
+          if (/추가.*한도|추가.*부탁/.test(item) && m.amount) return false;
+          return true;
+        });
+        m.special = cleanItems.join(" / ");
+      }
       const merged2 = mergeData(m, regParsed); setMerged(merged2); setMode("review");
       showToast("AI 분석 완료!");
     } catch (err) {
