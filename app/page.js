@@ -1,8 +1,8 @@
 "use client";
-import { useState, useEffect, useRef } from "react";
+import { useState, useRef } from "react";
 
 // ========================
-// PDF.js 로딩
+// PDF.js
 // ========================
 let pdfJsLoaded = false;
 function loadPdfJs() {
@@ -10,50 +10,54 @@ function loadPdfJs() {
     if (pdfJsLoaded && window.pdfjsLib) { resolve(window.pdfjsLib); return; }
     const s = document.createElement("script");
     s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-    s.onload = () => {
-      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-      pdfJsLoaded = true;
-      resolve(window.pdfjsLib);
-    };
+    s.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js"; pdfJsLoaded = true; resolve(window.pdfjsLib); };
     s.onerror = () => reject(new Error("PDF.js 로딩 실패"));
     document.head.appendChild(s);
   });
 }
-
 async function extractPdfText(file) {
   const pdfjsLib = await loadPdfJs();
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
   let t = "";
-  for (let i = 1; i <= pdf.numPages; i++) {
-    const page = await pdf.getPage(i);
-    const c = await page.getTextContent();
-    t += c.items.map(x => x.str).join(" ") + "\n";
-  }
+  for (let i = 1; i <= pdf.numPages; i++) { const page = await pdf.getPage(i); const c = await page.getTextContent(); t += c.items.map(x => x.str).join(" ") + "\n"; }
   return t;
 }
 
 // ========================
-// 폼 초기값
+// 초기값
 // ========================
 const EMPTY = {
   type: "아파트", rank: "1순위", loanType: "일반담보",
   name: "", birth: "", phone: "", address: "", addressRegistry: "",
-  kb: "", senior: "", seniorDetail: "",
+  // 시세 구조화
+  kbLow: null, kbMid: null, kbHigh: null,
+  kbApplied: null, kbAppliedValue: null,
+  housemuch: null, housemuchGrade: null,
+  actualPrice: null, actualDate: null,
+  kb: "", // 레거시 표시용
+  // 대출 구조화
+  seniorLoans: [], seniorTotal: { maxAmount: null, estimatedBalance: null },
+  replacementLoans: [], replacementTotal: { maxAmount: null, estimatedBalance: null },
+  senior: "", seniorDetail: "",
   amount: "", job: "", salary: "", credit: "",
   purpose: "", period: "", special: "", note: "",
+  // 등기부
+  owners: [], area: "", totalFloors: "", unitFloor: "",
+  landRight: "", transferDate: "", transferCause: "",
+  mortgages: [], risks: [],
 };
 
 // ========================
-// 카톡 파서 (정규식 — AI 실패 폴백용)
+// 카톡 정규식 파서 (폴백용)
 // ========================
 function parseKakao(raw) {
   const lines = raw.split("\n").map(l => l.trim()).filter(Boolean);
-  const d = { ...EMPTY };
+  const d = { ...EMPTY, seniorLoans: [], replacementLoans: [], seniorTotal: { maxAmount: null, estimatedBalance: null }, replacementTotal: { maxAmount: null, estimatedBalance: null }, owners: [], mortgages: [], risks: [] };
   const joined = lines.join(" ");
   const notes = [];
 
+  // 유형/순위
   const br = joined.match(/\[([^\]]+)\]/);
   if (br) {
     const tag = br[1];
@@ -61,11 +65,8 @@ function parseKakao(raw) {
     else if (/빌라|다세대/.test(tag)) d.type = "빌라/다세대";
     else if (/단독|다가구/.test(tag)) d.type = "단독/다가구";
     else if (/상가/.test(tag)) d.type = "상가";
-    else if (/토지/.test(tag)) d.type = "토지";
     if (/3순위/.test(tag)) d.rank = "3순위";
     else if (/2순위/.test(tag)) d.rank = "2순위";
-    if (/분양/.test(tag)) notes.push("분양건");
-    if (/동시/.test(tag)) notes.push("후순위 동시설정");
   } else {
     if (/오피스텔/.test(joined)) d.type = "오피스텔";
     else if (/빌라|다세대/.test(joined)) d.type = "빌라/다세대";
@@ -74,30 +75,31 @@ function parseKakao(raw) {
     if (/2순위/.test(joined)) d.rank = "2순위";
     else if (/3순위/.test(joined)) d.rank = "3순위";
   }
-
   if (/일반\s*담보/.test(joined)) d.loanType = "일반담보";
   else if (/분양/.test(joined)) d.loanType = "분양담보";
   else if (/대환/.test(joined)) d.loanType = "대환";
   else if (/후순위/.test(joined)) d.loanType = "후순위";
-  else if (/동시설정/.test(joined)) d.loanType = "동시설정";
-  else if (/매매잔금|잔금/.test(joined)) d.loanType = "매매잔금";
 
+  // 이름
   for (const line of lines) {
     if (/^(분양자|차주|이름|성명|성함|신청인|채무자|소유자)\s*[:\s]/.test(line)) {
-      const m = line.match(/[:\s]+([가-힣]{2,4})/);
-      if (m) { d.name = m[1]; break; }
+      const m = line.match(/[:\s]+([가-힣]{2,4})/); if (m) { d.name = m[1]; break; }
     }
   }
   if (!d.name) { const nm = lines[0]?.match(/^([가-힣]{2,4})\s*[/·]\s*\d{6}/); if (nm) d.name = nm[1]; }
   if (!d.name) { const nm2 = lines[0]?.match(/^([가-힣]{2,4})\s+\d{6}/); if (nm2) d.name = nm2[1]; }
+  if (!d.name) { const nm3 = lines[0]?.match(/^([가-힣]{2,4})$/); if (nm3) d.name = nm3[1]; }
 
+  // 생년
   const birthM1 = joined.match(/(\d{6})\s*[-]\s*(\d)/);
-  if (birthM1) d.birth = birthM1[1] + "-" + birthM1[2];
+  if (birthM1) d.birth = birthM1[1];
   else { const birthM2 = joined.match(/(\d{6})(?=\s|$|[^-\d])/); if (birthM2) d.birth = birthM2[1]; }
 
+  // 연락처
   const phM = joined.match(/(01\d[\s-]?\d{3,4}[\s-]?\d{4})/);
   if (phM) d.phone = phM[1].replace(/\s/g, "");
 
+  // 주소
   for (const line of lines) {
     if (/^(물건지|주소|소재지)\s*[:\s]/.test(line)) { d.address = line.replace(/^(물건지|주소|소재지)\s*[:\s]+/, "").trim(); break; }
   }
@@ -107,264 +109,342 @@ function parseKakao(raw) {
     }
   }
 
-  // KB/시세 — "KB AI시세 15,400 15,600 15,700" 패턴 포함
+  // KB 시세 구조화
   let kbBlock = "";
   for (let idx = 0; idx < lines.length; idx++) {
     if (/^(시세|KB|kb|▶.*KB|KB\s*AI)/i.test(lines[idx])) { kbBlock = lines.slice(idx, idx + 3).join(" "); break; }
   }
   if (!kbBlock) kbBlock = joined;
-  const kbParts = [];
+
   if (/KB\s*미등재|kb\s*미등재/i.test(kbBlock)) {
-    kbParts.push("KB 미등재");
+    // KB 미등재
   } else {
-    // "KB AI시세 15,400 15,600 15,700" — 숫자 3개 나열 (하/일/상)
     const kbAI = kbBlock.match(/KB\s*(?:AI\s*)?시세\s*([\d,.]+)\s+([\d,.]+)\s+([\d,.]+)/i);
     if (kbAI) {
-      kbParts.push("KB " + kbAI[1].replace(/,/g, "") + "만 / " + kbAI[2].replace(/,/g, "") + "만 / " + kbAI[3].replace(/,/g, "") + "만");
+      d.kbLow = parseInt(kbAI[1].replace(/,/g, ""));
+      d.kbMid = parseInt(kbAI[2].replace(/,/g, ""));
+      d.kbHigh = parseInt(kbAI[3].replace(/,/g, ""));
     } else {
       const kbHa = kbBlock.match(/KB\s*하\s*([\d,.]+)\s*만?/i);
-      const kbIl = kbBlock.match(/KB\s*일\s*([\d,.]+)\s*만?/i);
-      const kbSang = kbBlock.match(/KB\s*상\s*([\d,.]+)\s*만?/i);
-      if (kbHa || kbIl || kbSang) {
-        const vals = [];
-        if (kbHa) vals.push("하 " + kbHa[1].replace(/,/g, "") + "만");
-        if (kbIl) vals.push("일 " + kbIl[1].replace(/,/g, "") + "만");
-        if (kbSang) vals.push("상 " + kbSang[1].replace(/,/g, "") + "만");
-        kbParts.push("KB " + vals.join(" / "));
-      } else {
+      const kbIl = kbBlock.match(/(?:KB\s*)?일\s*([\d,.]+)\s*만?/i);
+      const kbSang = kbBlock.match(/(?:KB\s*)?상\s*([\d,.]+)\s*만?/i);
+      if (kbHa) d.kbLow = parseInt(kbHa[1].replace(/,/g, ""));
+      if (kbIl) d.kbMid = parseInt(kbIl[1].replace(/,/g, ""));
+      if (kbSang) d.kbHigh = parseInt(kbSang[1].replace(/,/g, ""));
+      if (!d.kbLow && !d.kbMid && !d.kbHigh) {
         const kbSingle = kbBlock.match(/KB\s*[:\s]*\s*([\d,.]+)\s*(만|억)?/i);
-        if (kbSingle) { const num = kbSingle[1].replace(/,/g, ""); const unit = kbSingle[2] || (parseInt(num) > 100 ? "만" : ""); kbParts.push("KB " + num + unit); }
+        if (kbSingle) d.kbMid = parseInt(kbSingle[1].replace(/,/g, ""));
       }
     }
-  }
-  const altSources = [
-    { pat: /하우스머치\s*(?:중|상|하)?\s*([\d,.]+)\s*만?/, label: "하우스머치" },
-    { pat: /감정가[^\d]*([\d,.]+)\s*만?/, label: "감정가" },
-  ];
-  for (const src of altSources) {
-    const m = kbBlock.match(src.pat);
-    if (m) {
-      // "하우스머치 중" → "하우스머치(중)"
-      const subLabel = kbBlock.match(/하우스머치\s*(중|상|하)/);
-      const label = src.label === "하우스머치" && subLabel ? "하우스머치(" + subLabel[1] + ")" : src.label;
-      kbParts.push(label + " " + m[1].replace(/,/g, "") + "만");
+    // (일) 적용가
+    const appliedM = kbBlock.match(/\((일|하|상)\)/);
+    if (appliedM) {
+      d.kbApplied = appliedM[1] === "일" ? "일반가" : appliedM[1] === "하" ? "하한가" : "상한가";
+      d.kbAppliedValue = appliedM[1] === "일" ? d.kbMid : appliedM[1] === "하" ? d.kbLow : d.kbHigh;
     }
   }
-  if (kbParts.length > 0) d.kb = kbParts.join(" / ");
+  // 하우스머치
+  const hmM = kbBlock.match(/하우스머치\s*(중|상|하)?\s*([\d,.]+)/);
+  if (hmM) { d.housemuch = parseInt(hmM[2].replace(/,/g, "")); d.housemuchGrade = hmM[1] || "중"; }
 
-  // 선순위
-  for (const line of lines) {
-    if (/총\s*합계|::\s*총/.test(line)) {
-      const amts = [...line.matchAll(/([\d,.]+)\s*만/g)];
-      if (amts.length >= 2) d.senior = amts[0][1].replace(/,/g, "") + "만 / " + amts[1][1].replace(/,/g, "") + "만";
-      else if (amts.length === 1) d.senior = amts[0][1].replace(/,/g, "") + "만";
-      break;
-    }
-  }
-  const seniorLines = [];
+  // 실거래
+  const silM = joined.match(/실거래[:\s]*([\d,.]+)\s*만?\s*(?:\(([^)]+)\))?/);
+  if (silM) { d.actualPrice = parseInt(silM[1].replace(/,/g, "")); d.actualDate = silM[2] || ""; }
+
+  // KB 표시 문자열 (레거시 호환)
+  d.kb = buildKbDisplay(d);
+
+  // 기대출 - 선순위/대환 분리
+  let section = "senior"; // default
+  let currentLoans = d.seniorLoans;
   const seniorNotes = [];
-  let afterGidaechul = false;
+
   for (let idx = 0; idx < lines.length; idx++) {
     const line = lines[idx];
-    // "기대출 :" 헤더 감지 → 다음 줄들이 기대출 상세
-    if (/^기대출\s*[:\s]*$/.test(line)) { afterGidaechul = true; continue; }
-    // 빈 줄이나 다른 섹션 헤더 만나면 기대출 영역 끝
-    if (afterGidaechul && /^(특이사항|시세|주소|직업|필요|요청|용도)\s*[:\s]/.test(line)) { afterGidaechul = false; }
+    if (/▶\s*선순위/.test(line)) { section = "senior"; currentLoans = d.seniorLoans; continue; }
+    if (/▶\s*대환|▶\s*말소/.test(line)) { section = "replacement"; currentLoans = d.replacementLoans; continue; }
+    if (/^기대출\s*[:\s]*$/.test(line)) { continue; }
+    if (/^(특이사항|시세|주소|직업|필요|요청|용도)\s*[:\s]/.test(line)) continue;
 
-    // 번호형: "1. 새마을금고 66,000만 ..."
-    if (/^\d+\.\s*.*(금고|은행|캐피탈|저축|보험|새마을|신협|농협|수협|화재|생명|대부|해상)/.test(line)) { seniorLines.push(line.trim()); continue; }
-    // 금융사명 시작 + 금액: "신한 : 35400" "현대해상 - 26.500"
-    if (/^(신한|국민|우리|하나|기업|농협|수협|SC|씨티|새마을|신협|현대|삼성|KB|카카오|토스|케이|캐피탈|미래|OK|웰컴|JT|SBI|아프로|페퍼|OSB|현대해상|한화|롯데|IBK|BNK|DGB|수산|산업|수출입)[\s가-힣]*\s*[-:]\s*[\d,.]+/.test(line)) { seniorLines.push(line.trim()); continue; }
-    // "미래대부 1,500" 같은 단순 패턴
-    if (/^[가-힣A-Za-z]+(?:대부|캐피탈|저축|금고)\s+[\d,.]+/.test(line)) { seniorLines.push(line.trim()); continue; }
-    // "기대출" 헤더 뒤 금액 있는 줄
-    if (afterGidaechul && /[\d,.]+/.test(line) && !/^(시세|KB|kb|주소|직업|월|필요|요청)/i.test(line)) { seniorLines.push(line.trim()); continue; }
+    // 합계
+    if (/총\s*합계|::\s*총|::\s*합계/.test(line)) {
+      const amts = [...line.matchAll(/([\d,.]+)\s*만/g)];
+      const total = { maxAmount: null, estimatedBalance: null };
+      if (amts.length >= 2) { total.maxAmount = parseInt(amts[0][1].replace(/,/g, "")); total.estimatedBalance = parseInt(amts[1][1].replace(/,/g, "")); }
+      else if (amts.length === 1) { total.maxAmount = parseInt(amts[0][1].replace(/,/g, "")); }
+      if (section === "senior") d.seniorTotal = total;
+      else d.replacementTotal = total;
+      continue;
+    }
 
+    // 대출 항목 파싱
+    const loan = parseLoanLine(line);
+    if (loan) { currentLoans.push(loan); continue; }
+
+    // 괄호 메모
     const noteM = line.match(/\(([가-힣\s]+(?:채무|대출|금거|가능|필요|예정|확인|부탁)[가-힣\s]*)\)/);
     if (noteM) seniorNotes.push(noteM[1].trim());
   }
-  if (seniorLines.length > 0) d.seniorDetail = seniorLines.join("\n");
-  if (seniorNotes.length > 0) { d.special = (d.special ? d.special + " / " : "") + seniorNotes.join(" / "); }
 
-  // 지분대출/공동소유 관련 요청
-  if (/지분\s*대출|공동\s*소유.*검토|지분.*검토/.test(joined)) {
-    const existing = d.special ? d.special + " / " : "";
-    d.special = existing + "지분대출 검토 요청";
-  }
-  // 배우자 공동소유
-  if (/배우자\s*공동/.test(joined)) {
-    const existing = d.special ? d.special + " / " : "";
-    d.special = existing + "배우자 공동소유";
-  }
+  if (seniorNotes.length > 0) d.special = seniorNotes.join(" / ");
+
+  // 레거시 seniorDetail 생성
+  d.seniorDetail = buildSeniorDetail(d);
+  d.senior = buildSeniorSummary(d);
 
   // 요청금액
   for (const line of lines) {
     if (/필요\s*자금|필요\s*금액|필요\s*[\d]/.test(line)) { const m = line.match(/([\d,.]+)\s*(만|억)?/); if (m) { d.amount = m[1].replace(/,/g, "") + (m[2] || "만"); break; } }
   }
   if (!d.amount) { for (const line of lines) { if (/희망\s*금|요청\s*금|추가.*한도|대출.*희망/.test(line)) { const m = line.match(/([\d,.]+)\s*(만|억)/); if (m) { d.amount = m[1].replace(/,/g, "") + m[2]; break; } } } }
-  if (!d.amount) { const revM = joined.match(/([\d,.]+)\s*(만|억)\s*(?:필요|부탁|요청|해주세요|가능할까요)/); if (revM) d.amount = revM[1].replace(/,/g, "") + revM[2]; }
-  if (!d.amount && /최대\s*요청|추가.*한도|추가.*부탁/.test(joined)) d.amount = "최대 요청";
+  if (!d.amount) { const revM = joined.match(/([\d,.]+)\s*(만|억)\s*(?:필요|부탁|요청|해주세요)/); if (revM) d.amount = revM[1].replace(/,/g, "") + revM[2]; }
+  if (!d.amount && /최대\s*요청|추가.*한도|추가.*부탁|대납.*최대/.test(joined)) d.amount = joined.match(/((?:\d순위\s*)?(?:대납\s*)?최대\s*요청|추가.*한도.*부탁[가-힣]*)/)?.[1] || "최대 요청";
   if (!d.amount) { const reqM = joined.match(/((?:\d순위\s*)?가능사?\s*확인\s*부탁[가-힣]*)/); if (reqM) d.amount = reqM[1]; }
-  if (!d.amount) { const needM = joined.match(/필요\s*자금\s*[:\s]\s*([\d,.]+)/); if (needM) d.amount = needM[1].replace(/,/g, "") + "만"; }
 
   // 직업
   for (const line of lines) { if (/^직업\s*[:\s]/.test(line)) { const m = line.match(/[:\s]+(.+)/); if (m) { d.job = m[1].trim(); break; } } }
   if (!d.job) { const jm = joined.match(/(4대\s*직장인|개인사업자|자영업자?|직장인|회사원|공무원|프리랜서|무직|주부|일용직|법인대표)/); if (jm) d.job = jm[1]; }
 
+  // 급여/신용
   const salM = joined.match(/월\s*급여\s*([\d,]+)\s*만?/); if (salM) d.salary = salM[1].replace(/,/g, "") + "만";
   const crM = joined.match(/(?:KCB|NICE|kcb|nice|나이스)\s*(\d{3,4})\s*(점|점수)?/);
-  if (crM) {
-    const src = crM[0].match(/KCB|NICE|kcb|nice|나이스/)?.[0] || "";
-    const srcLabel = /나이스|nice/i.test(src) ? "NICE" : src.toUpperCase();
-    d.credit = srcLabel + " " + crM[1] + (crM[2] || "점");
-  } else {
-    // "나이스 7등급" 또는 "NICE 7등급"
-    const crM2 = joined.match(/(?:KCB|NICE|나이스|kcb|nice)\s*(\d+)\s*등급/i);
-    if (crM2) {
-      const src2 = crM2[0].match(/KCB|NICE|나이스|kcb|nice/i)?.[0] || "";
-      const srcLabel2 = /나이스|nice/i.test(src2) ? "NICE" : src2.toUpperCase();
-      d.credit = srcLabel2 + " " + crM2[1] + "등급";
-    } else {
-      const crM3 = joined.match(/(\d+)\s*등급/);
-      if (crM3) d.credit = crM3[1] + "등급";
-    }
-  }
+  if (crM) { const src = /나이스|nice/i.test(crM[0]) ? "NICE" : "KCB"; d.credit = src + " " + crM[1] + (crM[2] || "점"); }
+  else { const crM2 = joined.match(/(?:KCB|NICE|나이스|kcb|nice)\s*(\d+)\s*등급/i); if (crM2) { const src2 = /나이스|nice/i.test(crM2[0]) ? "NICE" : "KCB"; d.credit = src2 + " " + crM2[1] + "등급"; } else { const crM3 = joined.match(/(\d+)\s*등급/); if (crM3) d.credit = crM3[1] + "등급"; } }
 
+  // 용도
   if (/대환/.test(joined)) d.purpose = "대환";
   else if (/생활자금/.test(joined)) d.purpose = "생활자금";
   else if (/잔금/.test(joined)) d.purpose = "잔금";
 
-  // 면적: ㎡ 와 m² 둘 다 인식, 공급/전용 구분
+  // 특이사항
   const areaDouble = joined.match(/([\d.]+)\s*(?:㎡|m²)\s*\/\s*([\d.]+)\s*(?:㎡|m²)/);
-  if (areaDouble) {
-    notes.push("공급 " + areaDouble[1] + "㎡ / 전용 " + areaDouble[2] + "㎡");
-  } else {
-    const areaM = joined.match(/전용\s*([\d.]+)\s*(?:㎡|m²)/);
-    if (areaM) notes.push("전용 " + areaM[1] + "㎡");
-    else { const areaM2 = joined.match(/(?:아파트|오피스텔|빌라)\s*([\d.]+)/); if (areaM2 && parseFloat(areaM2[1]) > 10 && parseFloat(areaM2[1]) < 300) notes.push("전용 " + areaM2[1] + "㎡"); }
-  }
+  if (areaDouble) notes.push("공급 " + areaDouble[1] + "㎡ / 전용 " + areaDouble[2] + "㎡");
+  else { const areaM = joined.match(/전용\s*([\d.]+)\s*(?:㎡|m²)/); if (areaM) notes.push("전용 " + areaM[1] + "㎡"); }
   const sedae = joined.match(/(\d+)\s*세대/); if (sedae) notes.push(sedae[1] + "세대");
-  const silM = joined.match(/실거래[:\s]*([\d,.]+)\s*만/); if (silM) notes.push("실거래 " + silM[1].replace(/,/g, "") + "만");
-  const bunM = joined.match(/분양가\s*([\d,.]+)\s*(만|억)/); if (bunM) notes.push("분양가 " + bunM[1] + bunM[2]);
+  const floorM = joined.match(/(\d+)\s*층\s*중\s*(\d+)\s*층/); if (floorM) notes.push(floorM[1] + "층 중 " + floorM[2] + "층");
+  if (d.actualPrice && d.actualDate) notes.push("실거래 " + d.actualPrice.toLocaleString() + "만(" + d.actualDate + ")");
+  else if (d.actualPrice) notes.push("실거래 " + d.actualPrice.toLocaleString() + "만");
   if (/신탁/.test(joined)) notes.push("신탁");
   if (/환매/.test(joined)) notes.push("환매특약");
-  const ageM = joined.match(/(\d+)\s*년차/);
-  if (ageM) notes.push(ageM[1] + "년차");
+  const ageM = joined.match(/(\d+)\s*년차/); if (ageM) notes.push(ageM[1] + "년차");
   const owM = joined.match(/소유권이전일?[:\s]*([\d년월일.\s]+)/); if (owM) notes.push("소유권이전 " + owM[1].trim());
-
-  // "특이사항 :" 섹션 내용 캡처
-  let afterSpecial = false;
-  for (const line of lines) {
-    if (/^특이사항\s*[:\s]*$/.test(line)) { afterSpecial = true; continue; }
-    if (afterSpecial && /^(기대출|시세|주소|직업|유형)\s*[:\s]/.test(line)) { afterSpecial = false; continue; }
-    if (afterSpecial && line.length > 2) {
-      // 급여/신용 줄은 이미 별도 파싱 → 스킵
-      if (/월\s*급여|KCB|NICE|kcb|nice|나이스/.test(line)) continue;
-      // "추가 한도 부탁" → 요청으로
-      if (/추가.*한도|추가.*부탁|한도.*부탁/.test(line) && !d.amount) {
-        d.amount = line.trim();
-      }
-      // "대환희망" → 용도
-      else if (/대환/.test(line)) {
-        notes.push(line.trim());
-        if (!d.purpose) d.purpose = "대환";
-      }
-      else {
-        notes.push(line.trim());
-      }
-    }
-  }
+  if (/지분\s*대출|지분.*검토/.test(joined)) notes.push("지분대출 검토 요청");
+  if (/배우자\s*공동/.test(joined)) notes.push("배우자 공동소유");
 
   if (notes.length) d.special = (d.special ? d.special + " / " : "") + notes.join(" / ");
   return d;
 }
 
-// ========================
-// 등기부 파서 (정규식)
-// ========================
-function parseRegistry(rawText) {
-  const r = { address: "", type: "", area: "", areaSupply: "", totalFloors: "", unitFloor: "", landRight: "", owners: [], owner: "", ownerBirth: "", ownership: "단독소유", transferDate: "", transferCause: "", mortgages: [], totalMax: 0, totalEst: 0, risks: [] };
-  let text = rawText.replace(/\[\s*주\s*의\s*사\s*항\s*\][\s\S]*?(?=고유번호|\d+\.\s|$)/g, " ").replace(/\[\s*참\s*고\s*사\s*항\s*\][\s\S]*?(?=\d+\.\s|$)/g, " ").replace(/본\s*주요\s*등기사항[\s\S]*?바랍니다\.?/g, " ").replace(/가\.\s*등기기록에서[\s\S]*?표시합니다\./g, " ").replace(/나\.\s*최종지분은[\s\S]*?하였습니다\./g, " ").replace(/다\.\s*지분이[\s\S]*?것입니다\./g, " ").replace(/라\.\s*대상소유자[\s\S]*?있습니다\./g, " ").replace(/정확한\s*권리사항은[\s\S]*?(?=\n|$)/g, " ");
-  const j = text.replace(/\s+/g, " ").trim();
+function parseLoanLine(line) {
+  // "1. 우리은행 5,940만 (5,400만) / 110.0%"
+  let m = line.match(/^\d+\.\s*([가-힣A-Za-z]+(?:은행|금고|캐피탈|저축|보험|새마을|신협|농협|수협|화재|생명|대부|해상|카드)?[가-힣]*)\s+([\d,.]+)\s*만?\s*(?:\(([\d,.]+)\s*만?\))?\s*(?:[/]\s*([\d.]+)\s*%)?/);
+  if (m) return { lender: m[1].trim(), maxAmount: parseInt(m[2].replace(/,/g, "")), estimatedBalance: m[3] ? parseInt(m[3].replace(/,/g, "")) : null, rate: m[4] ? parseFloat(m[4]) : null };
 
-  const addrM1 = j.match(/\[집합건물\]\s*((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[^1]*?제?\d+호)/);
-  if (addrM1) r.address = addrM1[1].replace(/\s+/g, " ").trim();
-  else { const addrM4 = j.match(/((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[가-힣\d\s\-.,()]*?제?\d+호)/); if (addrM4) r.address = addrM4[1].replace(/\s+/g, " ").trim(); }
-  r.address = r.address.replace(/\s+\d+\.\s.*$/, "").replace(/\s+소유.*$/, "").trim();
-  if (r.address.length > 120) r.address = r.address.slice(0, 120);
-
-  if (/집합건물/.test(rawText)) r.type = "집합건물";
-  const tm = j.match(/(아파트|오피스텔|빌라|다세대|연립|단독|다가구|상가|근린생활|사무실)/); if (tm) r.type = tm[1];
-
-  // 전용면적 — 전유부분 건물 표시에서 추출
-  const jeonyu = rawText.match(/전유부분의\s*건물의\s*표시[\s\S]*?(?=대지권|갑\s*구|$)/);
-  if (jeonyu) {
-    const jyArea = jeonyu[0].match(/([\d.]+)\s*㎡/);
-    if (jyArea && parseFloat(jyArea[1]) > 10 && parseFloat(jyArea[1]) < 300) r.area = parseFloat(jyArea[1]).toFixed(2) + "㎡";
-  }
-  if (!r.area) {
-    const arm = j.match(/(?:전용면적|전용|면적)\s*([\d.]+)\s*㎡/);
-    if (arm && parseFloat(arm[1]) > 10 && parseFloat(arm[1]) < 300) r.area = arm[1] + "㎡";
+  // "신한 : 35400 / 29500 (사촌 채무)"
+  m = line.match(/^([가-힣A-Za-z]+(?:은행|금고|캐피탈|저축|보험|새마을|신협|농협|수협|화재|생명|대부|해상|카드)?[가-힣]*)\s*[-:]\s*([\d,.]+)\s*(?:만\s*)?(?:[/]\s*([\d,.]+))?/);
+  if (m) {
+    const v1 = parseInt(m[2].replace(/,/g, "")), v2 = m[3] ? parseInt(m[3].replace(/,/g, "")) : null;
+    if (v2) {
+      const max = Math.max(v1, v2), est = Math.min(v1, v2);
+      return { lender: m[1].trim(), maxAmount: max, estimatedBalance: est, rate: null };
+    }
+    return { lender: m[1].trim(), maxAmount: v1, estimatedBalance: null, rate: null };
   }
 
-  // 공급면적(1동 건물 내역에서 해당 층 면적)
-  // "제N층 NNNN.NNNN㎡" 패턴에서 전체 건물 면적 → 공급면적 아님, 스킵
+  // "미래대부 1,500"
+  m = line.match(/^([가-힣A-Za-z]+(?:대부|캐피탈|저축|금고))\s+([\d,.]+)/);
+  if (m) return { lender: m[1].trim(), maxAmount: parseInt(m[2].replace(/,/g, "")), estimatedBalance: null, rate: null };
 
-  // 총 층수 — "N층" 패턴 중 가장 큰 숫자 또는 "지상 N층"
-  const floorM = rawText.match(/지상\s*(\d+)\s*층/);
-  if (floorM) r.totalFloors = floorM[1] + "층";
-  else {
-    // 1동 건물 내역에서 "10층 NNNN㎡" 같은 패턴으로 최고층 추출
-    const floorNums = [...rawText.matchAll(/^[\s]*(\d{1,3})층\s+[\d.]+㎡/gm)];
-    if (floorNums.length > 0) {
-      const maxFloor = Math.max(...floorNums.map(m => parseInt(m[1])));
-      r.totalFloors = maxFloor + "층";
+  // "농협 4,000 (4,800) 차주 본인"
+  m = line.match(/^([가-힣A-Za-z]+)\s+([\d,.]+)\s*(?:만\s*)?\(([\d,.]+)\s*만?\)/);
+  if (m) {
+    const v1 = parseInt(m[2].replace(/,/g, "")), v2 = parseInt(m[3].replace(/,/g, ""));
+    return { lender: m[1].trim(), maxAmount: Math.max(v1, v2), estimatedBalance: Math.min(v1, v2), rate: null };
+  }
+
+  return null;
+}
+
+// ========================
+// 시세/대출 표시 헬퍼
+// ========================
+function buildKbDisplay(d) {
+  const parts = [];
+  if (d.kbLow || d.kbMid || d.kbHigh) {
+    if (d.kbLow && d.kbMid && d.kbHigh) parts.push(`KB 하 ${num(d.kbLow)}만 / 일 ${num(d.kbMid)}만 / 상 ${num(d.kbHigh)}만`);
+    else if (d.kbLow && d.kbMid) parts.push(`KB 하 ${num(d.kbLow)}만 / 일 ${num(d.kbMid)}만`);
+    else if (d.kbMid) parts.push(`KB ${num(d.kbMid)}만`);
+    else if (d.kbLow) parts.push(`KB 하 ${num(d.kbLow)}만`);
+    if (d.kbApplied) parts[0] += ` (${d.kbApplied})`;
+  } else if (!d.housemuch) {
+    // KB 미등재 check
+  }
+  if (d.housemuch) parts.push(`하우스머치(${d.housemuchGrade || "중"}) ${num(d.housemuch)}만`);
+  if (parts.length === 0 && !d.kbMid && !d.kbLow) {
+    if (d.housemuch) return `KB 미등재 / 하우스머치(${d.housemuchGrade || "중"}) ${num(d.housemuch)}만`;
+    return "";
+  }
+  return parts.join(" / ");
+}
+
+function buildSeniorDetail(d) {
+  const lines = [];
+  if (d.seniorLoans.length > 0) {
+    if (d.replacementLoans.length > 0) lines.push("▶ 선순위");
+    d.seniorLoans.forEach((l, i) => {
+      let s = `${i + 1}. ${l.lender} ${num(l.maxAmount)}만`;
+      if (l.estimatedBalance) s += ` (${num(l.estimatedBalance)}만)`;
+      if (l.rate) s += ` / ${l.rate}%`;
+      lines.push(s);
+    });
+    if (d.seniorTotal.maxAmount) {
+      let s = `:: 합계 ${num(d.seniorTotal.maxAmount)}만`;
+      if (d.seniorTotal.estimatedBalance) s += ` (${num(d.seniorTotal.estimatedBalance)}만)`;
+      lines.push(s);
     }
   }
-  // 옥탑은 제외
-  if (!r.totalFloors) {
-    const buildingDesc = j.match(/(\d+)층\s*(?:업무|근린|오피스|아파트|주거)/);
-    if (buildingDesc) r.totalFloors = buildingDesc[1] + "층";
+  if (d.replacementLoans.length > 0) {
+    lines.push("▶ 대환/말소대상");
+    const startNo = d.seniorLoans.length;
+    d.replacementLoans.forEach((l, i) => {
+      let s = `${startNo + i + 1}. ${l.lender} ${num(l.maxAmount)}만`;
+      if (l.estimatedBalance) s += ` (${num(l.estimatedBalance)}만)`;
+      if (l.rate) s += ` / ${l.rate}%`;
+      lines.push(s);
+    });
+    if (d.replacementTotal.maxAmount) {
+      let s = `:: 합계 ${num(d.replacementTotal.maxAmount)}만`;
+      if (d.replacementTotal.estimatedBalance) s += ` (${num(d.replacementTotal.estimatedBalance)}만)`;
+      lines.push(s);
+    }
+  }
+  return lines.join("\n");
+}
+
+function buildSeniorSummary(d) {
+  const totalMax = d.seniorTotal.maxAmount || d.seniorLoans.reduce((s, l) => s + (l.maxAmount || 0), 0);
+  const totalEst = d.seniorTotal.estimatedBalance || d.seniorLoans.reduce((s, l) => s + (l.estimatedBalance || 0), 0);
+  if (!totalMax && !totalEst) return "";
+  let s = num(totalMax) + "만";
+  if (totalEst) s += " (" + num(totalEst) + "만)";
+  return s;
+}
+
+function num(n) { return n ? n.toLocaleString() : "0"; }
+function fmtW(a) { if (!a) return "0만"; const e = Math.floor(a / 10000), r = a % 10000; if (a >= 10000) return `${Math.floor(a / 10000)}억 ${(a % 10000).toLocaleString()}만`; return `${a.toLocaleString()}만`; }
+
+// ========================
+// LTV 계산 엔진
+// ========================
+function calcLTV(data) {
+  const result = { basePrice: null, basePriceLabel: "", seniorMaxTotal: 0, seniorEstTotal: 0, replacementMaxTotal: 0, replacementEstTotal: 0, ltvCurrentMax: null, ltvCurrentEst: null, ltvAfterReplace: null, availableAtLTV70: null, availableAtLTV80: null, availableAtLTV90: null, grade: "", gradeColor: "" };
+
+  // 기준 시세 결정: kbAppliedValue > kbMid > kbLow > housemuch
+  if (data.kbAppliedValue) { result.basePrice = data.kbAppliedValue; result.basePriceLabel = `KB ${data.kbApplied}`; }
+  else if (data.kbMid) { result.basePrice = data.kbMid; result.basePriceLabel = "KB 일반가"; }
+  else if (data.kbLow) { result.basePrice = data.kbLow; result.basePriceLabel = "KB 하한가"; }
+  else if (data.housemuch) { result.basePrice = data.housemuch; result.basePriceLabel = `하우스머치(${data.housemuchGrade || "중"})`; }
+
+  if (!result.basePrice) return result;
+
+  // 선순위 합산
+  if (data.seniorTotal?.maxAmount) result.seniorMaxTotal = data.seniorTotal.maxAmount;
+  else result.seniorMaxTotal = (data.seniorLoans || []).reduce((s, l) => s + (l.maxAmount || 0), 0);
+  if (data.seniorTotal?.estimatedBalance) result.seniorEstTotal = data.seniorTotal.estimatedBalance;
+  else result.seniorEstTotal = (data.seniorLoans || []).reduce((s, l) => s + (l.estimatedBalance || l.maxAmount || 0), 0);
+
+  // 대환대상 합산
+  if (data.replacementTotal?.maxAmount) result.replacementMaxTotal = data.replacementTotal.maxAmount;
+  else result.replacementMaxTotal = (data.replacementLoans || []).reduce((s, l) => s + (l.maxAmount || 0), 0);
+  if (data.replacementTotal?.estimatedBalance) result.replacementEstTotal = data.replacementTotal.estimatedBalance;
+  else result.replacementEstTotal = (data.replacementLoans || []).reduce((s, l) => s + (l.estimatedBalance || l.maxAmount || 0), 0);
+
+  // 등기부 근저당도 고려 (카톡 대출 정보가 없을 때)
+  let mortgageTotal = 0;
+  if (result.seniorMaxTotal === 0 && (data.mortgages || []).length > 0) {
+    mortgageTotal = data.mortgages.reduce((s, m) => s + (m.maxAmount || 0), 0);
+    result.seniorMaxTotal = mortgageTotal;
+    result.seniorEstTotal = Math.round(mortgageTotal / 1.2); // 추정
   }
 
-  // 해당 호실 층수 — "제N층 제NNN호" 에서 추출
+  const totalMax = result.seniorMaxTotal + result.replacementMaxTotal;
+  const totalEst = result.seniorEstTotal + result.replacementEstTotal;
+
+  // LTV 계산
+  result.ltvCurrentMax = Math.round((totalMax / result.basePrice) * 100 * 10) / 10;
+  result.ltvCurrentEst = Math.round((totalEst / result.basePrice) * 100 * 10) / 10;
+
+  // 대환 후 LTV (선순위만 유지)
+  if (result.replacementMaxTotal > 0) {
+    result.ltvAfterReplace = Math.round((result.seniorEstTotal / result.basePrice) * 100 * 10) / 10;
+  }
+
+  // 여유한도 계산 (추정잔액 기준)
+  const basisForCalc = result.replacementMaxTotal > 0 ? result.seniorEstTotal : totalEst;
+  result.availableAtLTV70 = Math.max(0, Math.round(result.basePrice * 0.7 - basisForCalc));
+  result.availableAtLTV80 = Math.max(0, Math.round(result.basePrice * 0.8 - basisForCalc));
+  result.availableAtLTV90 = Math.max(0, Math.round(result.basePrice * 0.9 - basisForCalc));
+
+  // 등급 (추정잔액 기준 LTV)
+  const refLtv = result.replacementMaxTotal > 0 ? result.ltvAfterReplace : result.ltvCurrentEst;
+  if (refLtv <= 70) { result.grade = "✅ 안전"; result.gradeColor = "#2ecc71"; }
+  else if (refLtv <= 80) { result.grade = "🟡 보통"; result.gradeColor = "#f1c40f"; }
+  else if (refLtv <= 90) { result.grade = "⚠️ 주의"; result.gradeColor = "#e67e22"; }
+  else { result.grade = "🚨 위험"; result.gradeColor = "#e74c3c"; }
+
+  return result;
+}
+
+// ========================
+// 등기부 정규식 파서
+// ========================
+function parseRegistry(rawText) {
+  const r = { address: "", type: "", area: "", totalFloors: "", unitFloor: "", landRight: "", owners: [], mortgages: [], risks: [], transferDate: "", transferCause: "" };
+  let text = rawText.replace(/\[\s*주\s*의\s*사\s*항\s*\][\s\S]*?(?=고유번호|\d+\.\s|$)/g, " ").replace(/\[\s*참\s*고\s*사\s*항\s*\][\s\S]*?(?=\d+\.\s|$)/g, " ").replace(/본\s*주요\s*등기사항[\s\S]*?바랍니다\.?/g, " ").replace(/가\.\s*등기기록에서[\s\S]*?표시합니다\./g, " ").replace(/나\.\s*최종지분은[\s\S]*?하였습니다\./g, " ");
+  const j = text.replace(/\s+/g, " ").trim();
+
+  // 주소
+  const addrM = j.match(/\[집합건물\]\s*((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[^1]*?제?\d+호)/);
+  if (addrM) r.address = addrM[1].replace(/\s+/g, " ").trim();
+  else { const addrM2 = j.match(/((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[가-힣\d\s\-.,()]*?제?\d+호)/); if (addrM2) r.address = addrM2[1].replace(/\s+/g, " ").trim(); }
+  if (r.address.length > 120) r.address = r.address.slice(0, 120);
+
+  // 면적
+  const jeonyu = rawText.match(/전유부분의\s*건물의\s*표시[\s\S]*?(?=대지권|갑\s*구|$)/);
+  if (jeonyu) { const jyArea = jeonyu[0].match(/([\d.]+)\s*㎡/); if (jyArea && parseFloat(jyArea[1]) > 10 && parseFloat(jyArea[1]) < 300) r.area = parseFloat(jyArea[1]).toFixed(2) + "㎡"; }
+  if (!r.area) { const arm = j.match(/(?:전용면적|전용|면적)\s*([\d.]+)\s*㎡/); if (arm && parseFloat(arm[1]) > 10) r.area = arm[1] + "㎡"; }
+
+  // 층수
+  const floorM = rawText.match(/지상\s*(\d+)\s*층/);
+  if (floorM) r.totalFloors = floorM[1] + "층";
   const unitFloorM = j.match(/제(\d+)층\s*제\d+호/);
   if (unitFloorM) r.unitFloor = unitFloorM[1] + "층";
-
   if (/대지권/.test(j)) r.landRight = "있음";
 
-  // 소유자 — 소유지분현황에서만
+  // 소유자
   const ownerSection = rawText.match(/1\.\s*소유지분현황[\s\S]*?(?=2\.\s*소유지분을|$)/);
   const ownerText = ownerSection ? ownerSection[0] : j;
   const ownerMatches = [...ownerText.matchAll(/([가-힣]{2,4})\s*\((소유자|공유자)\)\s*(\d{6}[-]?\*{0,7}\d{0,7})/g)];
-  if (ownerMatches.length > 0) {
-    for (const m of ownerMatches) {
-      const birth = m[3].replace(/[-]*\*+$/, "").replace(/-$/, "");
-      let share = "단독소유";
-      const after = ownerText.slice(ownerText.indexOf(m[0]) + m[0].length, ownerText.indexOf(m[0]) + m[0].length + 50);
-      const shareM = after.match(/(\d+)\s*분의\s*(\d+)|(\d+\/\d+)/); if (shareM) share = shareM[0];
-      r.owners.push({ name: m[1], birth, share, role: m[2] });
-    }
-  } else {
-    const owM1 = j.match(/([가-힣]{2,4})\s*\(소유자\)/); if (owM1) r.owners.push({ name: owM1[1], birth: "", share: "단독소유", role: "소유자" });
+  for (const m of ownerMatches) {
+    r.owners.push({ name: m[1], birth: m[3].replace(/[-]*\*+$/, "").replace(/-$/, ""), role: m[2], share: "단독소유" });
   }
-  if (r.owners.length > 1) r.ownership = "공동소유 (" + r.owners.length + "인)";
-  if (r.owners.length > 0) { r.owner = r.owners.map(o => o.name).join(" · "); r.ownerBirth = r.owners[0].birth; }
+  if (r.owners.length === 0) { const owM = j.match(/([가-힣]{2,4})\s*\(소유자\)/); if (owM) r.owners.push({ name: owM[1], birth: "", role: "소유자", share: "단독소유" }); }
+  if (r.owners.length > 1) r.owners.forEach(o => { const after = ownerText.slice(ownerText.indexOf(o.name)); const shareM = after.match(/(\d+)\s*분의\s*(\d+)/); if (shareM) o.share = shareM[0]; });
 
+  // 이전
   const trM = j.match(/소유권이전[^\d]*(20\d{2}[년.\s/-]\d{1,2}[월.\s/-]\d{1,2}일?)/); if (trM) r.transferDate = trM[1].replace(/\s/g, "");
   const caM = j.match(/소유권이전.*?(매매|분양|상속|증여|신탁|경매)/); if (caM) r.transferCause = caM[1];
 
-  // 위험 — 갑구에서만
+  // 위험 (갑구)
   let gapguText = "";
   const gapguM = rawText.match(/소유지분을\s*제외한[\s\S]*?(?=\(근\)\s*저당권|\d+\.\s*\(근\)|을\s*구|$)/i);
   if (gapguM) gapguText = gapguM[0];
-  const gapguSafe = /기록사항\s*없음/.test(gapguText);
-  if (!gapguSafe && gapguText) {
-    const riskDefs = [[/가압류/, "⚠️ 가압류"], [/가처분/, "⚠️ 가처분"], [/경매개시|임의경매|강제경매/, "🚨 경매개시결정"], [/신탁(?!.*보험)/, "⚠️ 신탁"], [/환매/, "⚠️ 환매특약"], [/예고등기/, "⚠️ 예고등기"], [/가등기/, "⚠️ 가등기"]];
+  if (gapguText && !/기록사항\s*없음/.test(gapguText)) {
+    const riskDefs = [[/가압류/, "가압류"], [/가처분/, "가처분"], [/경매개시|임의경매|강제경매/, "경매개시결정"], [/신탁(?!.*보험)/, "신탁"], [/환매/, "환매특약"], [/예고등기/, "예고등기"], [/가등기/, "가등기"]];
     for (const [pat, label] of riskDefs) { if (pat.test(gapguText)) r.risks.push(label); }
   }
 
-  // 을구 근저당 (말소 제외)
+  // 근저당 (을구, 말소 제외)
   let eulgu = "";
   const eulguM = rawText.match(/(근\s*\)?\s*저당권\s*및[\s\S]*?)(?=\[\s*참\s*고|\[\s*주\s*의|$)/);
   if (eulguM) eulgu = eulguM[1]; else eulgu = text;
@@ -373,121 +453,165 @@ function parseRegistry(rawText) {
     if (/말소|해지됨|해제|취하/.test(block)) continue;
     const maxM = block.match(/채권최고액\s*금?\s*([\d,]+)\s*원/); if (!maxM) continue;
     const amt = parseInt(maxM[1].replace(/,/g, "")); if (amt < 1000000) continue;
-    const mg = { rank: r.mortgages.length + 1, holder: "", maxAmount: amt, date: "" };
+    const mg = { holder: "", maxAmount: Math.round(amt / 10000), date: "" };
     const hm = block.match(/근저당권자\s+([가-힣()]+(?:주식회사|은행|금고|보험|캐피탈|저축|신협|농협|수협|생명|화재|카드|대부)[가-힣()]*)/);
     if (hm) mg.holder = hm[1].replace(/주식회사/g, "㈜").trim();
     else { const hm2 = block.match(/([\w가-힣]+(?:은행|금고|보험|캐피탈|저축|신협|농협|수협|생명|화재|카드|대부|해상))/); if (hm2) mg.holder = hm2[1]; }
     const dm = block.match(/(20\d{2}년\d{1,2}월\d{1,2}일)/); if (dm) mg.date = dm[1];
-    r.mortgages.push(mg); r.totalMax += amt;
+    r.mortgages.push(mg);
   }
-  r.totalEst = Math.round(r.totalMax / 1.2);
   return r;
 }
 
 // ========================
-// 유틸
+// AI → 내부 데이터 변환
 // ========================
-function fmtW(a) { if (!a) return "0원"; const e = Math.floor(a / 1e8), m = Math.round((a % 1e8) / 1e4); if (e > 0 && m > 0) return `${e}억 ${m.toLocaleString()}만`; if (e > 0) return `${e}억`; return `${m.toLocaleString()}만`; }
-function shortName(name) { return name.replace(/주식회사|㈜|\(주\)/g, "").replace(/화재보험$/, "").replace(/생명보험$/, "").replace(/손해보험$/, "").replace(/상호저축은행$/, "저축은행").trim(); }
-function normalizeType(t) { if (/오피스텔/.test(t)) return "오피스텔"; if (/빌라|다세대|연립/.test(t)) return "빌라/다세대"; if (/단독|다가구/.test(t)) return "단독/다가구"; if (/상가|근린/.test(t)) return "상가"; return "아파트"; }
+function aiToInternal(ai) {
+  const d = { ...EMPTY, seniorLoans: [], replacementLoans: [], seniorTotal: { maxAmount: null, estimatedBalance: null }, replacementTotal: { maxAmount: null, estimatedBalance: null }, owners: [], mortgages: [], risks: [] };
 
-function mergeData(kakao, reg) {
-  const f = { ...EMPTY };
-  f.name = kakao.name || reg?.owner || "";
-  f.birth = (kakao.birth && kakao.birth.length >= 6) ? kakao.birth : reg?.ownerBirth || kakao.birth || "";
-  f.phone = kakao.phone || ""; f.job = kakao.job || ""; f.salary = kakao.salary || "";
-  f.credit = kakao.credit || ""; f.purpose = kakao.purpose || ""; f.period = kakao.period || "";
-  f.amount = kakao.amount || ""; f.loanType = kakao.loanType || "일반담보";
-  // 주소 규칙:
-  // 도로명 + 지번 → 둘 다 표시
-  // 둘 다 지번 → 건물명 있는 것 하나만
-  // 둘 다 도로명 → 하나만
+  d.type = ai.type || "아파트";
+  if (/빌라|다세대/.test(d.type)) d.type = "빌라/다세대";
+  if (/단독|다가구/.test(d.type)) d.type = "단독/다가구";
+  d.rank = ai.rank || "1순위";
+  d.loanType = ai.loanType || "일반담보";
+  d.name = ai.name || "";
+  d.birth = ai.birth ? String(ai.birth).replace(/[-]\d*$/, "") : "";
+  d.phone = ai.phone && /^01\d/.test(String(ai.phone).replace(/[-\s]/g, "")) ? String(ai.phone) : "";
+  d.address = ai.address || "";
+  d.job = ai.job || "";
+  d.salary = ai.salary ? (String(ai.salary).includes("만") ? ai.salary : ai.salary + "만") : "";
+  d.credit = ai.credit || "";
+  if (d.credit && !/점|등급/.test(d.credit)) { if (/\d{3,4}$/.test(d.credit)) d.credit += "점"; else if (/\d{1,2}$/.test(d.credit)) d.credit += "등급"; }
+
+  // 시세
+  d.kbLow = ai.kbLow || null;
+  d.kbMid = ai.kbMid || null;
+  d.kbHigh = ai.kbHigh || null;
+  d.kbApplied = ai.kbApplied || null;
+  d.kbAppliedValue = ai.kbAppliedValue || null;
+  d.housemuch = ai.housemuch || null;
+  d.housemuchGrade = ai.housemuchGrade || null;
+  d.actualPrice = ai.actualPrice || null;
+  d.actualDate = ai.actualDate || null;
+  d.kb = buildKbDisplay(d);
+
+  // 대출
+  d.seniorLoans = (ai.seniorLoans || []).map((l, i) => ({ ...l, no: i + 1 }));
+  d.replacementLoans = (ai.replacementLoans || []).map((l, i) => ({ ...l, no: i + 1 }));
+  d.seniorTotal = ai.seniorTotal || { maxAmount: null, estimatedBalance: null };
+  d.replacementTotal = ai.replacementTotal || { maxAmount: null, estimatedBalance: null };
+  d.seniorDetail = buildSeniorDetail(d);
+  d.senior = buildSeniorSummary(d);
+
+  d.amount = ai.amount || "";
+  d.purpose = ai.purpose || "";
+  d.special = ai.special || "";
+  d.note = ai.note || "";
+
+  // 등기부 (AI가 함께 분석한 경우)
+  if (ai.registryAddress) d.addressRegistry = ai.registryAddress;
+  if (ai.owners) d.owners = ai.owners;
+  if (ai.area) d.area = ai.area;
+  if (ai.totalFloors) d.totalFloors = String(ai.totalFloors);
+  if (ai.unitFloor) d.unitFloor = String(ai.unitFloor);
+  if (ai.landRight) d.landRight = ai.landRight;
+  if (ai.transferDate) d.transferDate = ai.transferDate;
+  if (ai.transferCause) d.transferCause = ai.transferCause;
+  if (ai.mortgages) d.mortgages = ai.mortgages;
+  if (ai.risks) d.risks = ai.risks;
+
+  return d;
+}
+
+// ========================
+// 병합 (AI/정규식 + 등기부)
+// ========================
+function mergeData(parsed, regParsed) {
+  const f = { ...parsed };
+
+  if (!regParsed) return f;
+
+  // 주소 병합
   const isDoroName = (addr) => /[가-힣]+(?:로|길)\s*\d/.test(addr || "");
-  const hasBuildingName = (addr) => /[가-힣]+(?:빌|파크|캐슬|아파트|빌라|타워|하이츠|맨션|빌리지|시티|힐|프라자|하우스|리움|센트럴|메트로|자이|래미안|아이파크|푸르지오|엘리움|롯데|SK|GS)/.test(addr || "");
-
-  if (reg?.address && kakao.address && reg.address !== kakao.address) {
-    const kakaoIsDoro = isDoroName(kakao.address);
-    const regIsDoro = isDoroName(reg.address);
-
-    if (kakaoIsDoro !== regIsDoro) {
-      // 하나는 도로명, 하나는 지번 → 둘 다 표시
-      if (kakaoIsDoro) {
-        f.address = kakao.address;
-        f.addressRegistry = reg.address;
-      } else {
-        f.address = reg.address;
-        f.addressRegistry = kakao.address;
-      }
+  const hasBuildingName = (addr) => /[가-힣]+(?:빌|파크|캐슬|아파트|빌라|타워|하이츠|센트럴|자이|래미안|아이파크|푸르지오)/.test(addr || "");
+  if (regParsed.address && f.address && regParsed.address !== f.address) {
+    if (isDoroName(f.address) !== isDoroName(regParsed.address)) {
+      if (isDoroName(f.address)) f.addressRegistry = regParsed.address;
+      else { f.addressRegistry = f.address; f.address = regParsed.address; }
     } else {
-      // 둘 다 지번 또는 둘 다 도로명 → 건물명 있는 것 하나만
-      if (hasBuildingName(kakao.address)) {
-        f.address = kakao.address;
-      } else if (hasBuildingName(reg.address)) {
-        f.address = reg.address;
-      } else {
-        f.address = kakao.address; // 둘 다 건물명 없으면 카톡 우선
-      }
-      f.addressRegistry = ""; // 중복이니 안 보여줌
+      if (hasBuildingName(regParsed.address) && !hasBuildingName(f.address)) f.address = regParsed.address;
     }
-  } else {
-    f.address = kakao.address || reg?.address || "";
-  }
-  f.type = reg?.type ? normalizeType(reg.type) : kakao.type || "아파트";
-  f.kb = kakao.kb || "";
-  if (reg && reg.mortgages.length > 0) {
-    f.seniorDetail = reg.mortgages.map((m, i) => `${i + 1}. ${shortName(m.holder) || "불명"}: 채권최고액 ${fmtW(m.maxAmount)}${m.date ? " (" + m.date + ")" : ""}`).join("\n");
-    f.senior = `채권최고액 합계 ${fmtW(reg.totalMax)}`;
-    f.rank = reg.mortgages.length === 0 ? "1순위" : reg.mortgages.length === 1 ? "2순위" : "3순위";
-  } else { f.seniorDetail = kakao.seniorDetail || ""; f.senior = kakao.senior || ""; f.rank = kakao.rank || "1순위"; }
-  const specials = [];
-  if (kakao.special) specials.push(kakao.special);
-  if (reg) {
-    if (reg.owners.length > 1) specials.push("공동소유: " + reg.owners.map(o => `${o.name}(${o.share})`).join(", "));
-    if (reg.area) specials.push("전용 " + reg.area);
-    if (reg.totalFloors) specials.push("총 " + reg.totalFloors);
-    if (reg.unitFloor) specials.push("해당 " + reg.unitFloor);
-    if (reg.landRight) specials.push("대지권: " + reg.landRight);
-    if (reg.transferDate) specials.push("소유권이전: " + reg.transferDate + (reg.transferCause ? "(" + reg.transferCause + ")" : ""));
-    if (reg.risks.length > 0) specials.push(reg.risks.join(", "));
-  }
-  f.special = specials.join(" / "); f.note = kakao.note || "";
+  } else if (!f.address && regParsed.address) f.address = regParsed.address;
+
+  // 소유자
+  if (regParsed.owners?.length > 0 && f.owners.length === 0) f.owners = regParsed.owners;
+  if (!f.name && regParsed.owners?.length > 0) f.name = regParsed.owners[0].name;
+
+  // 물건 정보
+  if (regParsed.area && !f.area) f.area = regParsed.area;
+  if (regParsed.totalFloors && !f.totalFloors) f.totalFloors = regParsed.totalFloors;
+  if (regParsed.unitFloor && !f.unitFloor) f.unitFloor = regParsed.unitFloor;
+  if (regParsed.landRight && !f.landRight) f.landRight = regParsed.landRight;
+  if (regParsed.transferDate && !f.transferDate) f.transferDate = regParsed.transferDate;
+  if (regParsed.transferCause && !f.transferCause) f.transferCause = regParsed.transferCause;
+
+  // 근저당 (등기부 우선)
+  if (regParsed.mortgages?.length > 0) f.mortgages = regParsed.mortgages;
+  // 위험
+  if (regParsed.risks?.length > 0) f.risks = [...new Set([...(f.risks || []), ...regParsed.risks])];
+
+  // 특이사항 보충
+  const specials = f.special ? [f.special] : [];
+  if (regParsed.owners?.length > 1) specials.push("공동소유: " + regParsed.owners.map(o => `${o.name}(${o.share})`).join(", "));
+  if (regParsed.area && !f.special?.includes(regParsed.area)) specials.push("전용 " + regParsed.area);
+  if (regParsed.totalFloors) specials.push("총 " + regParsed.totalFloors);
+  if (regParsed.unitFloor) specials.push("해당 " + regParsed.unitFloor);
+  if (regParsed.landRight) specials.push("대지권: " + regParsed.landRight);
+  if (regParsed.transferDate) specials.push("소유권이전: " + regParsed.transferDate + (regParsed.transferCause ? "(" + regParsed.transferCause + ")" : ""));
+  if (regParsed.risks?.length > 0) specials.push(regParsed.risks.map(r => "⚠️ " + r).join(", "));
+  f.special = specials.join(" / ");
+
+  // 순위 자동 판단
+  const totalMortgages = (f.seniorLoans?.length || 0) + (regParsed.mortgages?.length || 0);
+  if (totalMortgages === 0) f.rank = "1순위";
+  else if (totalMortgages === 1) f.rank = "2순위";
+  else if (totalMortgages >= 2) f.rank = (parseInt(f.rank) || 1) >= 2 ? f.rank : "2순위";
+
   return f;
 }
 
+// ========================
+// 발송 양식
+// ========================
 function toOutput(d) {
-  // 생년에서 주민번호 뒷자리 제거 (910516-1 → 910516)
   const birth = d.birth ? d.birth.replace(/[-]\d*$/, "") : "";
-
   let o = "◈ 올웨더파트너스대부\n\n";
   o += `[ ${d.loanType} / ${d.type} / ${d.rank} ]\n\n`;
-  o += `▶ 신청인\n`;
+  o += "▶ 신청인\n";
   if (d.name) o += `성명: ${d.name}\n`;
   if (birth) o += `생년: ${birth}\n`;
   if (d.phone) o += `연락처: ${d.phone}\n`;
   if (d.job) o += `직업: ${d.job}\n`;
   if (d.salary) o += `월소득: ${d.salary}\n`;
   if (d.credit) o += `신용: ${d.credit}\n`;
-  o += `\n▶ 담보물\n`;
+  o += "\n▶ 담보물\n";
   if (d.address) o += `주소: ${d.address}\n`;
-  if (d.addressRegistry) {
-    const regLabel = /[가-힣]+(?:로|길)\s*\d/.test(d.addressRegistry) ? "도로명" : "지번";
-    o += `${regLabel}: ${d.addressRegistry}\n`;
-  }
+  if (d.addressRegistry) { const label = /[가-힣]+(?:로|길)\s*\d/.test(d.addressRegistry) ? "도로명" : "지번"; o += `${label}: ${d.addressRegistry}\n`; }
   if (d.kb) o += `시세: ${d.kb}\n`;
-  o += `\n`;
-  if (d.special || d.note) {
-    o += `▶ 특이사항\n`;
+  o += "\n";
+  if (d.special || d.note || (d.risks || []).length > 0) {
+    o += "▶ 특이사항\n";
     if (d.special) d.special.split(/\s*\/\s*/).forEach(item => { if (item.trim()) o += `* ${item.trim()}\n`; });
     if (d.note) o += `* ${d.note}\n`;
-    o += `\n`;
+    o += "\n";
   }
-  o += `▶ 대출현황\n`;
-  if (d.seniorDetail) { d.seniorDetail.split("\n").forEach(l => { o += `${l}\n`; }); const mc = (d.seniorDetail.match(/^\s*\d+\./gm) || []).length; if (mc >= 2 && d.senior) o += `:: 합계 ${d.senior}\n`; }
+  o += "▶ 대출현황\n";
+  if (d.seniorDetail) { d.seniorDetail.split("\n").forEach(l => { o += `${l}\n`; }); }
   else if (d.senior) o += `선순위: ${d.senior}\n`;
   if (d.amount) o += `요청: ${d.amount}\n`;
   if (d.purpose) o += `용도: ${d.purpose}\n`;
   if (d.period) o += `기간: ${d.period}\n`;
-  o += `\n㈜올웨더파트너스대부\n☎ 010-7485-3357`;
+  o += "\n㈜올웨더파트너스대부\n☎ 010-7485-3357";
   return o;
 }
 
@@ -506,50 +630,51 @@ export default function Home() {
   const [regText, setRegText] = useState("");
   const [regFile, setRegFile] = useState(null);
   const [regParsed, setRegParsed] = useState(null);
-  const [kakaoParsed, setKakaoParsed] = useState(null);
-  const [merged, setMerged] = useState({ ...EMPTY });
+  const [merged, setMerged] = useState({ ...EMPTY, seniorLoans: [], replacementLoans: [], seniorTotal: { maxAmount: null, estimatedBalance: null }, replacementTotal: { maxAmount: null, estimatedBalance: null }, owners: [], mortgages: [], risks: [] });
   const [output, setOutput] = useState("");
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState("");
   const [copied, setCopied] = useState(false);
-  const [records, setRecords] = useState([]);
   const [aiParsing, setAiParsing] = useState(false);
   const [analysis, setAnalysis] = useState("");
+  const [aiModel, setAiModel] = useState("");
   const fileRef = useRef(null);
 
   function showToast(msg) { setToast(msg); setTimeout(() => setToast(""), 2500); }
 
-  // PDF 업로드
   async function handlePdf(e) {
     const file = e.target.files?.[0]; if (!file) return;
     setLoading(true);
     try {
       const text = await extractPdfText(file); setRegText(text); setRegFile(file.name);
       const parsed = parseRegistry(text); setRegParsed(parsed);
-      showToast(`등기부 분석 완료! 근저당 ${parsed.mortgages.length}건`);
-    } catch (err) { showToast("PDF 읽기 실패: " + err.message); }
+      showToast(`등기부 분석: 근저당 ${parsed.mortgages.length}건`);
+    } catch (err) { showToast("PDF 오류: " + err.message); }
     finally { setLoading(false); if (fileRef.current) fileRef.current.value = ""; }
   }
 
-  // 정규식 분석
-  function handleAnalyze() {
-    const kp = kakaoText.trim() ? parseKakao(kakaoText) : null; setKakaoParsed(kp);
+  // 정규식만 (빠른 분석)
+  function handleQuickParse() {
+    const kp = kakaoText.trim() ? parseKakao(kakaoText) : { ...EMPTY, seniorLoans: [], replacementLoans: [], seniorTotal: { maxAmount: null, estimatedBalance: null }, replacementTotal: { maxAmount: null, estimatedBalance: null }, owners: [], mortgages: [], risks: [] };
     if (regText.trim() && !regParsed) { const rp = parseRegistry(regText); setRegParsed(rp); }
-    const m = mergeData(kp || { ...EMPTY }, regParsed); setMerged(m); setMode("review");
-    showToast("분석 완료!");
+    const m = mergeData(kp, regParsed); setMerged(m); setMode("review");
+    showToast("빠른 분석 완료!");
   }
 
-  // AI 카톡 파싱
+  // AI 메인 파서
   async function handleAIParse() {
     if (!kakaoText.trim() && !regText.trim() && !regFile) return;
     setAiParsing(true);
     try {
+      // 등기부 정규식 먼저
+      if (regText.trim() && !regParsed) { const rp = parseRegistry(regText); setRegParsed(rp); }
+
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 20000);
+      const timeout = setTimeout(() => controller.abort(), 22000);
       const res = await fetch("/api/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: kakaoText.slice(0, 2000) }),
+        body: JSON.stringify({ text: kakaoText.slice(0, 2500), registryText: regText.trim() ? regText.slice(0, 4000) : undefined }),
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -557,89 +682,54 @@ export default function Home() {
       let data;
       try { data = JSON.parse(text); } catch { throw new Error("응답 파싱 실패"); }
       if (data.error) throw new Error(data.error);
-      const parsed = data.result;
-      const m = { ...EMPTY };
-      for (const k of Object.keys(EMPTY)) { if (parsed[k] && parsed[k] !== "") m[k] = String(parsed[k]); }
-      if (/빌라|다세대/.test(m.type)) m.type = "빌라/다세대";
-      if (/단독|다가구/.test(m.type)) m.type = "단독/다가구";
 
-      // 1단계: AI가 못 잡은 빈 값을 정규식으로 보충
+      setAiModel(data.model || "");
+      const aiData = aiToInternal(data.result);
+
+      // 정규식으로 빈 값 보충
       if (kakaoText.trim()) {
         const regex = parseKakao(kakaoText);
-        for (const k of Object.keys(EMPTY)) {
-          if (!m[k] && regex[k]) m[k] = regex[k];
+        for (const k of ["name", "birth", "phone", "job", "salary", "credit", "address", "amount", "purpose"]) {
+          if (!aiData[k] && regex[k]) aiData[k] = regex[k];
         }
-        // 신용에 KCB/NICE 소스가 빠졌으면 정규식 값으로 교체
-        if (m.credit && !/KCB|NICE|나이스/i.test(m.credit) && regex.credit && /KCB|NICE/i.test(regex.credit)) {
-          m.credit = regex.credit;
+        // 시세 보충
+        if (!aiData.kbMid && !aiData.kbLow && !aiData.housemuch) {
+          aiData.kbLow = regex.kbLow; aiData.kbMid = regex.kbMid; aiData.kbHigh = regex.kbHigh;
+          aiData.kbApplied = regex.kbApplied; aiData.kbAppliedValue = regex.kbAppliedValue;
+          aiData.housemuch = regex.housemuch; aiData.housemuchGrade = regex.housemuchGrade;
+          aiData.kb = buildKbDisplay(aiData);
         }
+        // 대출 보충
+        if (aiData.seniorLoans.length === 0 && regex.seniorLoans.length > 0) {
+          aiData.seniorLoans = regex.seniorLoans;
+          aiData.replacementLoans = regex.replacementLoans;
+          aiData.seniorTotal = regex.seniorTotal;
+          aiData.replacementTotal = regex.replacementTotal;
+          aiData.seniorDetail = regex.seniorDetail;
+          aiData.senior = regex.senior;
+        }
+        // 신용 소스 보충
+        if (aiData.credit && !/KCB|NICE/i.test(aiData.credit) && regex.credit && /KCB|NICE/i.test(regex.credit)) aiData.credit = regex.credit;
       }
 
-      // 2단계: 단위 정규화
-      if (m.salary && !/만|원/.test(m.salary)) m.salary = m.salary + "만";
-      if (m.credit && !/점|등급/.test(m.credit)) {
-        if (/\d{3,4}$/.test(m.credit)) m.credit = m.credit + "점";
-        else if (/\d{1,2}$/.test(m.credit)) m.credit = m.credit + "등급";
+      // 시세=요청 혼동 체크
+      if (aiData.kb && aiData.amount) {
+        const kbD = aiData.kb.replace(/[^\d]/g, ""), amtD = aiData.amount.replace(/[^\d]/g, "");
+        if (kbD && amtD && kbD === amtD) aiData.amount = "";
       }
-      // 시세가 숫자만이면 KB + 만 붙이기
-      if (m.kb && /^\d[\d,.]*$/.test(m.kb.trim())) {
-        m.kb = "KB " + m.kb.trim().replace(/,/g, "") + "만";
-      }
-
-      // 3단계: 잘못된 값 정리
-      // 연락처가 전화번호가 아닌 경우 제거 ("-1" 같은 오탐)
-      if (m.phone && !/^01\d/.test(m.phone.replace(/[-\s]/g, ""))) m.phone = "";
-      // 생년에서 주민번호 뒷자리 제거 (출력 시가 아니라 여기서)
-      if (m.birth) m.birth = m.birth.replace(/[-]\d*$/, "");
-
-      // 4단계: 시세와 요청 혼동 체크 (보충 후에 실행)
-      if (m.kb && m.amount) {
-        const kbDigits = m.kb.replace(/[^\d]/g, "");
-        const amtDigits = m.amount.replace(/[^\d]/g, "");
-        if (kbDigits && amtDigits && kbDigits === amtDigits) m.amount = "";
-      }
-      // 요청이 비었는데 "추가 한도 부탁" 같은 텍스트 있으면 채움
-      if (!m.amount && /추가.*한도|추가.*부탁/.test(kakaoText)) m.amount = "추가 한도 부탁드립니다";
-      if (!m.amount && /가능사.*확인|확인.*부탁/.test(kakaoText)) {
-        const reqM = kakaoText.match(/((?:\d순위\s*)?가능사?\s*확인\s*부탁[가-힣]*)/);
-        if (reqM) m.amount = reqM[1];
+      if (!aiData.amount) {
+        if (/추가.*한도|추가.*부탁/.test(kakaoText)) aiData.amount = "추가 한도 부탁드립니다";
+        else if (/가능사.*확인|확인.*부탁/.test(kakaoText)) { const reqM = kakaoText.match(/((?:\d순위\s*)?가능사?\s*확인\s*부탁[가-힣]*)/); if (reqM) aiData.amount = reqM[1]; }
+        else if (/대납.*최대|최대.*요청/.test(kakaoText)) aiData.amount = "대납 최대 요청";
       }
 
-      setKakaoParsed(m);
-      // 5단계: 특이사항 정리 — 다른 필드와 중복되는 내용 제거
-      if (m.special) {
-        const cleanItems = [];
-        m.special.split(/\s*\/\s*/).forEach(item => {
-          const t = item.trim();
-          if (!t) return;
-          // 기대출 줄 제거 (금융사명 + 숫자), 괄호 안 메모는 보존
-          if (/^(신한|국민|우리|하나|기업|농협|현대|삼성|새마을|신협|미래|OK|캐피탈|해상)[\s가-힣]*[-:]\s*[\d,.]+/.test(t)) {
-            const noteInParen = t.match(/\(([^)]+)\)/);
-            if (noteInParen) cleanItems.push(noteInParen[1]);
-            return;
-          }
-          // 기대출 숫자 잔여 ("29500 (사촌..." 같은 것) — 괄호 메모 보존
-          if (/^\d[\d,.]*\s*\(/.test(t)) {
-            const noteInParen = t.match(/\(([^)]+)\)/);
-            if (noteInParen) cleanItems.push(noteInParen[1]);
-            return;
-          }
-          // 요청에 이미 들어간 내용 제거
-          if (m.amount) {
-            const amtClean = m.amount.replace(/만|억/g, "").trim();
-            if (t === m.amount || t === amtClean) return;
-            if (/가능사|확인.*부탁|부탁.*드리겠|추가.*한도|추가.*부탁/.test(t) && /가능사|확인|부탁|추가|한도/.test(m.amount)) return;
-          }
-          cleanItems.push(t);
-        });
-        m.special = cleanItems.join(" / ");
-      }
-      const merged2 = mergeData(m, regParsed); setMerged(merged2); setMode("review");
-      showToast("AI 분석 완료!");
+      const m = mergeData(aiData, regParsed);
+      setMerged(m); setMode("review");
+      showToast(`AI 분석 완료 (${data.model || ""})`);
     } catch (err) {
-      console.error(err); handleAnalyze();
-      const msg = err.name === "AbortError" ? "타임아웃" : err.message.slice(0, 40);
-      showToast("AI 실패 → 정규식 (" + msg + ")");
+      console.error(err);
+      handleQuickParse();
+      showToast("AI 실패 → 정규식 (" + (err.name === "AbortError" ? "타임아웃" : err.message.slice(0, 30)) + ")");
     } finally { setAiParsing(false); }
   }
 
@@ -648,24 +738,12 @@ export default function Home() {
     if (!regText.trim()) { showToast("등기부 데이터가 없습니다"); return; }
     setAiParsing(true);
     try {
-      // 정규식으로 이미 추출한 정보를 AI에게 같이 보냄
-      const hint = regParsed ? {
-        owners: regParsed.owners?.map(o => `${o.name}(${o.role}, ${o.share})`).join(", ") || "",
-        ownership: regParsed.ownership || "",
-        area: regParsed.area || "",
-        totalFloors: regParsed.totalFloors || "",
-        unitFloor: regParsed.unitFloor || "",
-        mortgages: regParsed.mortgages?.map(m => `${m.holder}: 채권최고액 ${fmtW(m.maxAmount)}${m.date ? " (" + m.date + ")" : ""}`).join(", ") || "",
-        totalMax: regParsed.totalMax ? fmtW(regParsed.totalMax) : "",
-        risks: regParsed.risks?.join(", ") || "없음",
-      } : null;
-
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 25000);
       const res = await fetch("/api/registry", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: regText.slice(0, 4000), kb: merged.kb || "", hint }),
+        body: JSON.stringify({ text: regText.slice(0, 4000), kb: merged.kb || "", hint: regParsed ? { owners: regParsed.owners?.map(o => `${o.name}(${o.role}, ${o.share})`).join(", ") || "", area: regParsed.area || "", totalFloors: regParsed.totalFloors || "", unitFloor: regParsed.unitFloor || "", mortgages: regParsed.mortgages?.map(m => `${m.holder}: ${m.maxAmount}만`).join(", ") || "", risks: regParsed.risks?.join(", ") || "없음" } : null }),
         signal: controller.signal,
       });
       clearTimeout(timeout);
@@ -675,28 +753,22 @@ export default function Home() {
       if (data.error) throw new Error(data.error);
       setAnalysis(data.result); showToast("권리분석 완료!");
     } catch (err) {
-      const msg = err.name === "AbortError" ? "타임아웃 — 잠시 후 다시 시도하세요" : err.message;
-      setAnalysis("❌ 분석 실패: " + msg); showToast("권리분석 실패");
+      setAnalysis("❌ 분석 실패: " + (err.name === "AbortError" ? "타임아웃" : err.message));
     } finally { setAiParsing(false); }
   }
 
-  function handleGenerate() { const out = toOutput(merged); setOutput(out); setMode("output"); }
-
-  function copyText(text) {
-    try { if (navigator.clipboard?.writeText) { navigator.clipboard.writeText(text); return true; } } catch {}
-    try { const ta = document.createElement("textarea"); ta.value = text; ta.setAttribute("readonly", ""); ta.style.cssText = "position:fixed;left:-9999px"; document.body.appendChild(ta); ta.select(); ta.setSelectionRange(0, 99999); const ok = document.execCommand("copy"); document.body.removeChild(ta); if (ok) return true; } catch {}
-    return false;
-  }
+  function handleGenerate() { setOutput(toOutput(merged)); setMode("output"); }
   function handleCopy() {
-    if (copyText(output)) { setCopied(true); setTimeout(() => setCopied(false), 2000); }
-    else showToast("텍스트를 선택 후 Ctrl+C");
+    try { navigator.clipboard?.writeText(output).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); } catch { showToast("복사 실패"); }
   }
-  function handleReset() { setKakaoText(""); setRegText(""); setRegFile(null); setRegParsed(null); setKakaoParsed(null); setMerged({ ...EMPTY }); setOutput(""); setAnalysis(""); setMode("input"); }
-
+  function handleReset() { setKakaoText(""); setRegText(""); setRegFile(null); setRegParsed(null); setMerged({ ...EMPTY, seniorLoans: [], replacementLoans: [], seniorTotal: { maxAmount: null, estimatedBalance: null }, replacementTotal: { maxAmount: null, estimatedBalance: null }, owners: [], mortgages: [], risks: [] }); setOutput(""); setAnalysis(""); setAiModel(""); setMode("input"); }
   const set = (k) => (e) => setMerged({ ...merged, [k]: e.target.value });
   const TYPES = ["아파트", "빌라/다세대", "오피스텔", "단독/다가구", "상가", "토지", "기타"];
   const RANKS = ["1순위", "2순위", "3순위"];
   const LTYPES = ["일반담보", "분양담보", "후순위", "동시설정", "대환", "매매잔금", "생활안정자금", "전세퇴거자금", "기타"];
+
+  // LTV 계산
+  const ltv = calcLTV(merged);
 
   const s = {
     wrap: { fontFamily: "'Noto Sans KR',sans-serif", background: navy, minHeight: "100vh", color: "#e0dcd0", maxWidth: 600, margin: "0 auto" },
@@ -720,10 +792,32 @@ export default function Home() {
     row: { display: "flex", gap: 12 },
     half: { flex: 1 },
     fieldGroup: { marginBottom: 14 },
-    badge: (c) => ({ display: "inline-block", padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: c === "gold" ? "rgba(212,168,67,0.15)" : c === "red" ? "rgba(255,80,80,0.12)" : "rgba(100,160,255,0.12)", color: c === "gold" ? goldLight : c === "red" ? "#ff7b7b" : "#7ab3ff", marginRight: 6 }),
+    badge: (c) => ({ display: "inline-block", padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 600, background: c === "gold" ? "rgba(212,168,67,0.15)" : c === "red" ? "rgba(255,80,80,0.12)" : c === "blue" ? "rgba(100,160,255,0.12)" : "rgba(100,200,100,0.12)", color: c === "gold" ? goldLight : c === "red" ? "#ff7b7b" : c === "blue" ? "#7ab3ff" : "#7fdb7f", marginRight: 6 }),
     toast: { position: "fixed", bottom: 80, left: "50%", transform: "translateX(-50%)", background: gold, color: navy, padding: "10px 24px", borderRadius: 30, fontSize: 12, fontWeight: 700, zIndex: 999, boxShadow: "0 4px 20px rgba(0,0,0,0.3)", maxWidth: "90%", textAlign: "center" },
     uploadBox: { border: `2px dashed ${border}`, borderRadius: 10, padding: "20px", textAlign: "center", cursor: "pointer", background: "rgba(212,168,67,0.03)" },
     sourceTag: (c) => ({ display: "inline-block", padding: "2px 8px", borderRadius: 4, fontSize: 10, fontWeight: 600, marginLeft: 8, background: c === "kakao" ? "rgba(255,220,50,0.12)" : "rgba(100,200,100,0.12)", color: c === "kakao" ? "#ffe066" : "#7fdb7f" }),
+  };
+
+  // LTV 바 컴포넌트
+  const LtvBar = ({ label, value, maxVal }) => {
+    if (value === null || value === undefined) return null;
+    const pct = Math.min(value, 120);
+    const barColor = value <= 70 ? "#2ecc71" : value <= 80 ? "#f1c40f" : value <= 90 ? "#e67e22" : "#e74c3c";
+    return (
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 4 }}>
+          <span style={{ color: textMuted }}>{label}</span>
+          <span style={{ color: barColor, fontWeight: 700 }}>{value}%</span>
+        </div>
+        <div style={{ background: "rgba(255,255,255,0.06)", borderRadius: 4, height: 8, overflow: "hidden", position: "relative" }}>
+          <div style={{ width: `${Math.min(pct / 1.2 * 100, 100)}%`, height: "100%", background: barColor, borderRadius: 4, transition: "width 0.5s" }} />
+          {/* 70/80/90 구간선 */}
+          <div style={{ position: "absolute", left: `${70 / 1.2}%`, top: 0, bottom: 0, width: 1, background: "rgba(255,255,255,0.3)" }} />
+          <div style={{ position: "absolute", left: `${80 / 1.2}%`, top: 0, bottom: 0, width: 1, background: "rgba(255,255,255,0.3)" }} />
+          <div style={{ position: "absolute", left: `${90 / 1.2}%`, top: 0, bottom: 0, width: 1, background: "rgba(255,255,255,0.3)" }} />
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -733,12 +827,13 @@ export default function Home() {
 
       <div style={s.header}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <div style={s.brand}><div style={s.brandIcon}>AW</div><div><div style={s.brandText}>올웨더파트너스대부</div><div style={s.brandSub}>물건접수 종합분석기</div></div></div>
-          <span style={{ background: "rgba(100,200,100,0.1)", border: "1px solid rgba(100,200,100,0.25)", borderRadius: 20, padding: "4px 12px", color: "#7fdb7f", fontSize: 11, fontWeight: 600 }}>AI 연동</span>
+          <div style={s.brand}><div style={s.brandIcon}>AW</div><div><div style={s.brandText}>올웨더파트너스대부</div><div style={s.brandSub}>물건접수 종합분석기 v2</div></div></div>
+          <span style={{ background: "rgba(100,200,100,0.1)", border: "1px solid rgba(100,200,100,0.25)", borderRadius: 20, padding: "4px 12px", color: "#7fdb7f", fontSize: 11, fontWeight: 600 }}>AI 메인</span>
         </div>
         <div style={s.tabs}>
           <button style={s.tab(mode === "input")} onClick={() => setMode("input")}>접수입력</button>
           <button style={s.tab(mode === "review")} onClick={() => setMode("review")}>검토수정</button>
+          <button style={s.tab(mode === "analysis")} onClick={() => setMode("analysis")}>📊 분석</button>
           <button style={s.tab(mode === "output")} onClick={() => setMode("output")}>발송양식</button>
         </div>
       </div>
@@ -747,33 +842,61 @@ export default function Home() {
         {/* === 접수입력 === */}
         {mode === "input" && (<>
           <div style={s.section}>◆ 카톡 내용 붙여넣기</div><div style={s.divider} />
-          <p style={{ fontSize: 12, color: textMuted, marginBottom: 10, lineHeight: 1.5 }}>업체에서 받은 카톡 메시지를 그대로 붙여넣으세요.</p>
-          <textarea style={s.textarea} placeholder={"홍상민 760213-1 직장인\n울산광역시 중구 복산동...\nkb : 51000\n신한 : 35400 / 29500\n...\n\n아무 형식이나 OK!"} value={kakaoText} onChange={(e) => setKakaoText(e.target.value)} />
+          <p style={{ fontSize: 12, color: textMuted, marginBottom: 10, lineHeight: 1.5 }}>업체에서 받은 카톡 메시지를 그대로 붙여넣으세요. AI가 자동 분석합니다.</p>
+          <textarea style={s.textarea} placeholder={"홍명선 / 770504\nKB 하 39,500만 / 일 43,000만 (일)\n▶ 선순위\n1. 우리은행 5,940만 (5,400만)\n▶ 대환/말소대상\n4. 더라이즈대부 3,900만\n..."} value={kakaoText} onChange={(e) => setKakaoText(e.target.value)} />
           {kakaoText.trim() && <div style={{ fontSize: 12, color: "#7fdb7f", marginTop: 6 }}>✓ 카톡 데이터 입력됨</div>}
 
           <div style={{ ...s.section, marginTop: 24 }}>◆ 등기부등본 (선택)</div><div style={s.divider} />
           <input ref={fileRef} type="file" accept=".pdf" onChange={handlePdf} style={{ display: "none" }} />
           <div style={{ ...s.uploadBox, borderColor: regFile ? "#7fdb7f" : border }} onClick={() => fileRef.current?.click()}>
             {loading ? <span style={{ color: goldLight }}>⟳ PDF 분석 중...</span>
-              : regFile ? <div><div style={{ color: "#7fdb7f", fontWeight: 700 }}>✓ {regFile}</div><div style={{ color: textMuted, fontSize: 12, marginTop: 4 }}>{regParsed ? `근저당 ${regParsed.mortgages.length}건 / 위험요소 ${regParsed.risks.length}건` : ""}</div></div>
+              : regFile ? <div><div style={{ color: "#7fdb7f", fontWeight: 700 }}>✓ {regFile}</div><div style={{ color: textMuted, fontSize: 12, marginTop: 4 }}>{regParsed ? `근저당 ${regParsed.mortgages.length}건 / 위험 ${regParsed.risks.length}건` : ""}</div></div>
               : <div><div style={{ fontSize: 28, marginBottom: 6 }}>📄</div><div style={{ color: goldLight, fontWeight: 600 }}>등기부 PDF 업로드</div></div>}
           </div>
           {!regFile && <><div style={{ textAlign: "center", padding: "10px 0", fontSize: 11, color: textMuted }}>— 또는 텍스트 직접 붙여넣기 —</div><textarea style={{ ...s.textarea, minHeight: 80 }} placeholder="등기부등본 텍스트..." value={regText} onChange={(e) => setRegText(e.target.value)} /></>}
 
           {aiParsing && <div style={{ textAlign: "center", padding: "16px 0", color: goldLight, fontSize: 14, fontWeight: 600 }}><span style={{ display: "inline-block", animation: "spin 1s linear infinite", marginRight: 8 }}>⟳</span>AI 분석 중...<style>{`@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}`}</style></div>}
           <button style={{ ...s.btnPrimary, marginTop: 20, opacity: (kakaoText.trim() || regText.trim() || regFile) && !aiParsing ? 1 : 0.4, pointerEvents: (kakaoText.trim() || regText.trim() || regFile) && !aiParsing ? "auto" : "none" }} onClick={handleAIParse}>🤖 AI 종합 분석</button>
-          <button style={{ ...s.btnSecondary, opacity: (kakaoText.trim() || regText.trim() || regFile) && !aiParsing ? 1 : 0.4, pointerEvents: (kakaoText.trim() || regText.trim() || regFile) && !aiParsing ? "auto" : "none" }} onClick={handleAnalyze}>⚡ 빠른 분석 (정규식)</button>
+          <button style={{ ...s.btnSecondary, opacity: (kakaoText.trim() || regText.trim() || regFile) && !aiParsing ? 1 : 0.4 }} onClick={handleQuickParse}>⚡ 빠른 분석 (정규식)</button>
           <button style={s.btnSecondary} onClick={handleReset}>초기화</button>
         </>)}
 
-        {/* === 검토/수정 === */}
+        {/* === 검토수정 === */}
         {mode === "review" && (<>
           <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-            {kakaoParsed && <span style={s.badge("gold")}>카톡 반영</span>}
-            {regParsed && <span style={s.badge("blue")}>등기부 반영</span>}
-            {regParsed?.risks.length > 0 && <span style={s.badge("red")}>위험 {regParsed.risks.length}건</span>}
+            {aiModel && <span style={s.badge("green")}>AI: {aiModel}</span>}
+            {regParsed && <span style={s.badge("blue")}>등기부</span>}
+            {(merged.risks || []).length > 0 && <span style={s.badge("red")}>위험 {merged.risks.length}건</span>}
           </div>
-          {regParsed?.risks.length > 0 && <div style={{ background: "rgba(255,80,80,0.08)", border: "1px solid rgba(255,80,80,0.2)", borderRadius: 10, padding: "12px 16px", marginBottom: 16 }}><div style={{ fontSize: 12, color: "#ff6b6b", fontWeight: 700, marginBottom: 6 }}>🚨 위험요소</div>{regParsed.risks.map((r, i) => <div key={i} style={{ fontSize: 13, marginBottom: 2 }}>{r}</div>)}</div>}
+          {(merged.risks || []).length > 0 && <div style={{ background: "rgba(255,80,80,0.08)", border: "1px solid rgba(255,80,80,0.2)", borderRadius: 10, padding: "12px 16px", marginBottom: 16 }}><div style={{ fontSize: 12, color: "#ff6b6b", fontWeight: 700, marginBottom: 6 }}>🚨 위험요소</div>{merged.risks.map((r, i) => <div key={i} style={{ fontSize: 13, marginBottom: 2 }}>⚠️ {r}</div>)}</div>}
+
+          {/* LTV 미니 대시보드 */}
+          {ltv.basePrice && (
+            <div style={{ background: "rgba(100,160,255,0.04)", border: `1px solid rgba(100,160,255,0.15)`, borderRadius: 10, padding: "14px 16px", marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <span style={{ fontSize: 12, color: "#7ab3ff", fontWeight: 700 }}>📊 LTV 분석</span>
+                <span style={{ fontSize: 14, fontWeight: 800, color: ltv.gradeColor }}>{ltv.grade}</span>
+              </div>
+              <div style={{ fontSize: 11, color: textMuted, marginBottom: 8 }}>기준시세: {ltv.basePriceLabel} {num(ltv.basePrice)}만</div>
+              <LtvBar label="현재 LTV (추정잔액)" value={ltv.ltvCurrentEst} />
+              <LtvBar label="현재 LTV (채권최고액)" value={ltv.ltvCurrentMax} />
+              {ltv.ltvAfterReplace !== null && <LtvBar label="대환 후 LTV" value={ltv.ltvAfterReplace} />}
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <div style={{ flex: 1, background: "rgba(46,204,113,0.08)", borderRadius: 6, padding: "8px", textAlign: "center" }}>
+                  <div style={{ fontSize: 10, color: "#2ecc71" }}>70% 여유</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#2ecc71" }}>{num(ltv.availableAtLTV70)}만</div>
+                </div>
+                <div style={{ flex: 1, background: "rgba(241,196,15,0.08)", borderRadius: 6, padding: "8px", textAlign: "center" }}>
+                  <div style={{ fontSize: 10, color: "#f1c40f" }}>80% 여유</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#f1c40f" }}>{num(ltv.availableAtLTV80)}만</div>
+                </div>
+                <div style={{ flex: 1, background: "rgba(231,76,60,0.08)", borderRadius: 6, padding: "8px", textAlign: "center" }}>
+                  <div style={{ fontSize: 10, color: "#e74c3c" }}>90% 여유</div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#e74c3c" }}>{num(ltv.availableAtLTV90)}만</div>
+                </div>
+              </div>
+            </div>
+          )}
 
           <div style={s.section}>◆ 접수 구분</div><div style={s.divider} />
           <div style={s.row}><div style={s.half}><div style={s.fieldGroup}><label style={s.label}>유형</label><select style={s.select} value={merged.type} onChange={set("type")}>{TYPES.map(t => <option key={t}>{t}</option>)}</select></div></div><div style={s.half}><div style={s.fieldGroup}><label style={s.label}>순위</label><select style={s.select} value={merged.rank} onChange={set("rank")}>{RANKS.map(r => <option key={r}>{r}</option>)}</select></div></div></div>
@@ -799,13 +922,12 @@ export default function Home() {
           <div style={s.row}><div style={s.half}><div style={s.fieldGroup}><label style={s.label}>선순위 합계</label><input style={s.input} value={merged.senior} onChange={set("senior")} /></div></div><div style={s.half}><div style={s.fieldGroup}><label style={s.label}>요청금액</label><input style={s.input} value={merged.amount} onChange={set("amount")} /></div></div></div>
           <div style={s.row}><div style={s.half}><div style={s.fieldGroup}><label style={s.label}>자금용도</label><input style={s.input} value={merged.purpose} onChange={set("purpose")} /></div></div><div style={s.half}><div style={s.fieldGroup}><label style={s.label}>이용기간</label><input style={s.input} value={merged.period} onChange={set("period")} /></div></div></div>
 
-          {/* AI 등기부 권리분석 */}
           {regText.trim() && (<>
             <div style={{ ...s.section, marginTop: 24 }}>◆ AI 권리분석</div><div style={s.divider} />
             {!analysis ? (
               <button style={{ ...s.btnSecondary, background: "rgba(100,160,255,0.1)", borderColor: "rgba(100,160,255,0.3)", color: "#7ab3ff" }} onClick={handleAIRegistry} disabled={aiParsing}>{aiParsing ? "⟳ 분석 중..." : "🤖 등기부 위험사항 분석"}</button>
             ) : (<>
-              <div style={{ ...s.resultBox, background: "rgba(100,160,255,0.04)", border: "1px solid rgba(100,160,255,0.15)", whiteSpace: "pre-wrap", fontSize: 13, lineHeight: 1.8 }}>{analysis}</div>
+              <div style={{ ...s.resultBox, background: "rgba(100,160,255,0.04)", border: "1px solid rgba(100,160,255,0.15)" }}>{analysis}</div>
               <button style={{ ...s.btnSecondary, fontSize: 12, color: textMuted }} onClick={() => setAnalysis("")}>다시 분석</button>
             </>)}
           </>)}
@@ -814,10 +936,155 @@ export default function Home() {
           <button style={s.btnSecondary} onClick={() => setMode("input")}>← 입력으로</button>
         </>)}
 
+        {/* === 📊 분석 탭 === */}
+        {mode === "analysis" && (<>
+          <div style={s.section}>📊 대출 실행 분석</div><div style={s.divider} />
+
+          {!ltv.basePrice ? (
+            <div style={{ textAlign: "center", padding: "40px 20px", color: textMuted }}>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>📋</div>
+              <div style={{ fontSize: 14, marginBottom: 8 }}>시세 데이터가 필요합니다</div>
+              <div style={{ fontSize: 12 }}>접수입력에서 카톡 데이터를 분석하세요</div>
+            </div>
+          ) : (<>
+            {/* 물건 요약 */}
+            <div style={{ background: navyMid, border: `1px solid ${border}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: goldLight, marginBottom: 10 }}>{merged.name || "미확인"} — {merged.type} {merged.rank}</div>
+              <div style={{ fontSize: 12, color: textMuted, lineHeight: 1.8 }}>
+                {merged.address && <div>📍 {merged.address}</div>}
+                {merged.area && <div>📐 전용 {merged.area}{merged.totalFloors ? ` / ${merged.totalFloors} 중 ${merged.unitFloor || "?"}` : ""}</div>}
+                {merged.job && <div>👤 {merged.job}{merged.salary ? ` / 월 ${merged.salary}` : ""}{merged.credit ? ` / ${merged.credit}` : ""}</div>}
+              </div>
+            </div>
+
+            {/* 시세 비교 */}
+            <div style={{ background: navyMid, border: `1px solid ${border}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: goldLight, marginBottom: 10 }}>💰 시세</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {merged.kbLow && <div style={{ background: "rgba(100,160,255,0.06)", borderRadius: 6, padding: "6px 12px", fontSize: 12 }}><span style={{ color: textMuted }}>KB 하</span> <span style={{ color: "#7ab3ff", fontWeight: 700 }}>{num(merged.kbLow)}만</span></div>}
+                {merged.kbMid && <div style={{ background: merged.kbApplied === "일반가" ? "rgba(100,160,255,0.15)" : "rgba(100,160,255,0.06)", borderRadius: 6, padding: "6px 12px", fontSize: 12, border: merged.kbApplied === "일반가" ? "1px solid rgba(100,160,255,0.3)" : "none" }}><span style={{ color: textMuted }}>KB 일</span> <span style={{ color: "#7ab3ff", fontWeight: 700 }}>{num(merged.kbMid)}만</span>{merged.kbApplied === "일반가" && <span style={{ color: "#7fdb7f", fontSize: 10, marginLeft: 4 }}>적용</span>}</div>}
+                {merged.kbHigh && <div style={{ background: "rgba(100,160,255,0.06)", borderRadius: 6, padding: "6px 12px", fontSize: 12 }}><span style={{ color: textMuted }}>KB 상</span> <span style={{ color: "#7ab3ff", fontWeight: 700 }}>{num(merged.kbHigh)}만</span></div>}
+                {merged.housemuch && <div style={{ background: "rgba(100,160,255,0.06)", borderRadius: 6, padding: "6px 12px", fontSize: 12 }}><span style={{ color: textMuted }}>하우스머치({merged.housemuchGrade})</span> <span style={{ color: "#7ab3ff", fontWeight: 700 }}>{num(merged.housemuch)}만</span></div>}
+                {merged.actualPrice && <div style={{ background: "rgba(100,160,255,0.06)", borderRadius: 6, padding: "6px 12px", fontSize: 12 }}><span style={{ color: textMuted }}>실거래{merged.actualDate ? `(${merged.actualDate})` : ""}</span> <span style={{ color: "#7ab3ff", fontWeight: 700 }}>{num(merged.actualPrice)}만</span></div>}
+              </div>
+              <div style={{ fontSize: 11, color: textMuted, marginTop: 6 }}>LTV 기준: {ltv.basePriceLabel} {num(ltv.basePrice)}만</div>
+            </div>
+
+            {/* 선순위/대환 구조 */}
+            {(merged.seniorLoans?.length > 0 || merged.replacementLoans?.length > 0 || merged.mortgages?.length > 0) && (
+              <div style={{ background: navyMid, border: `1px solid ${border}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: goldLight, marginBottom: 10 }}>🏦 대출 구조</div>
+                {merged.seniorLoans?.length > 0 && (<>
+                  <div style={{ fontSize: 11, color: "#7fdb7f", fontWeight: 600, marginBottom: 6 }}>▶ 유지 선순위</div>
+                  {merged.seniorLoans.map((l, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                      <span style={{ color: "#e0dcd0" }}>{i + 1}. {l.lender}</span>
+                      <span style={{ color: "#7ab3ff" }}>{num(l.maxAmount)}만{l.estimatedBalance ? ` (${num(l.estimatedBalance)}만)` : ""}</span>
+                    </div>
+                  ))}
+                  {ltv.seniorEstTotal > 0 && <div style={{ fontSize: 11, color: textMuted, textAlign: "right", marginTop: 4 }}>선순위 합계: {num(ltv.seniorEstTotal)}만 (채권최고액 {num(ltv.seniorMaxTotal)}만)</div>}
+                </>)}
+                {merged.replacementLoans?.length > 0 && (<>
+                  <div style={{ fontSize: 11, color: "#e67e22", fontWeight: 600, marginTop: 10, marginBottom: 6 }}>▶ 대환/말소 대상</div>
+                  {merged.replacementLoans.map((l, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0", borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                      <span style={{ color: "#e0dcd0" }}>{merged.seniorLoans.length + i + 1}. {l.lender}</span>
+                      <span style={{ color: "#e67e22" }}>{num(l.maxAmount)}만{l.estimatedBalance ? ` (${num(l.estimatedBalance)}만)` : ""}</span>
+                    </div>
+                  ))}
+                  {ltv.replacementEstTotal > 0 && <div style={{ fontSize: 11, color: textMuted, textAlign: "right", marginTop: 4 }}>대환 합계: {num(ltv.replacementEstTotal)}만</div>}
+                </>)}
+                {merged.seniorLoans?.length === 0 && merged.mortgages?.length > 0 && (<>
+                  <div style={{ fontSize: 11, color: "#7ab3ff", fontWeight: 600, marginBottom: 6 }}>▶ 등기부 근저당</div>
+                  {merged.mortgages.map((m, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0" }}>
+                      <span>{m.holder || "불명"}</span>
+                      <span style={{ color: "#7ab3ff" }}>{num(m.maxAmount)}만</span>
+                    </div>
+                  ))}
+                </>)}
+              </div>
+            )}
+
+            {/* LTV 분석 */}
+            <div style={{ background: navyMid, border: `2px solid ${ltv.gradeColor}22`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: goldLight }}>📊 LTV 분석</span>
+                <span style={{ fontSize: 18, fontWeight: 800, color: ltv.gradeColor }}>{ltv.grade}</span>
+              </div>
+              <LtvBar label="현재 LTV (추정잔액 기준)" value={ltv.ltvCurrentEst} />
+              <LtvBar label="현재 LTV (채권최고액 기준)" value={ltv.ltvCurrentMax} />
+              {ltv.ltvAfterReplace !== null && (<>
+                <div style={{ borderTop: `1px solid ${border}`, margin: "8px 0", paddingTop: 8 }}>
+                  <div style={{ fontSize: 11, color: "#e67e22", marginBottom: 4 }}>대환 후 (선순위만 유지 시)</div>
+                </div>
+                <LtvBar label="대환 후 LTV" value={ltv.ltvAfterReplace} />
+              </>)}
+            </div>
+
+            {/* 실행 가능 한도 */}
+            <div style={{ background: navyMid, border: `1px solid ${border}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: goldLight, marginBottom: 12 }}>💡 실행 가능 한도 (추정)</div>
+              <div style={{ fontSize: 11, color: textMuted, marginBottom: 10 }}>
+                {ltv.replacementMaxTotal > 0 ? "대환 후 선순위 기준으로 계산" : "현재 기대출 추정잔액 기준으로 계산"}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <div style={{ flex: 1, background: "rgba(46,204,113,0.06)", border: "1px solid rgba(46,204,113,0.15)", borderRadius: 8, padding: 12, textAlign: "center" }}>
+                  <div style={{ fontSize: 10, color: "#2ecc71", marginBottom: 4 }}>LTV 70%</div>
+                  <div style={{ fontSize: 10, color: textMuted, marginBottom: 2 }}>안전</div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: "#2ecc71" }}>{num(ltv.availableAtLTV70)}<span style={{ fontSize: 11 }}>만</span></div>
+                </div>
+                <div style={{ flex: 1, background: "rgba(241,196,15,0.06)", border: "1px solid rgba(241,196,15,0.15)", borderRadius: 8, padding: 12, textAlign: "center" }}>
+                  <div style={{ fontSize: 10, color: "#f1c40f", marginBottom: 4 }}>LTV 80%</div>
+                  <div style={{ fontSize: 10, color: textMuted, marginBottom: 2 }}>보통</div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: "#f1c40f" }}>{num(ltv.availableAtLTV80)}<span style={{ fontSize: 11 }}>만</span></div>
+                </div>
+                <div style={{ flex: 1, background: "rgba(231,76,60,0.06)", border: "1px solid rgba(231,76,60,0.15)", borderRadius: 8, padding: 12, textAlign: "center" }}>
+                  <div style={{ fontSize: 10, color: "#e74c3c", marginBottom: 4 }}>LTV 90%</div>
+                  <div style={{ fontSize: 10, color: textMuted, marginBottom: 2 }}>위험</div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: "#e74c3c" }}>{num(ltv.availableAtLTV90)}<span style={{ fontSize: 11 }}>만</span></div>
+                </div>
+              </div>
+              {merged.amount && (
+                <div style={{ marginTop: 12, padding: "8px 12px", background: "rgba(212,168,67,0.08)", borderRadius: 6 }}>
+                  <span style={{ fontSize: 12, color: textMuted }}>차주 요청: </span>
+                  <span style={{ fontSize: 14, fontWeight: 700, color: goldLight }}>{merged.amount}</span>
+                  {merged.amount.match(/^\d/) && ltv.basePrice && (() => {
+                    const reqAmt = parseInt(merged.amount.replace(/[^\d]/g, ""));
+                    const basisForCalc = ltv.replacementMaxTotal > 0 ? ltv.seniorEstTotal : (ltv.seniorEstTotal + ltv.replacementEstTotal);
+                    const afterLtv = Math.round(((basisForCalc + reqAmt) / ltv.basePrice) * 100 * 10) / 10;
+                    const color = afterLtv <= 70 ? "#2ecc71" : afterLtv <= 80 ? "#f1c40f" : afterLtv <= 90 ? "#e67e22" : "#e74c3c";
+                    return <span style={{ marginLeft: 8, fontSize: 12, color }}>(실행 시 LTV {afterLtv}%)</span>;
+                  })()}
+                </div>
+              )}
+            </div>
+
+            {/* 위험요소 */}
+            {(merged.risks || []).length > 0 && (
+              <div style={{ background: "rgba(255,80,80,0.06)", border: "1px solid rgba(255,80,80,0.2)", borderRadius: 10, padding: 16, marginBottom: 16 }}>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#ff6b6b", marginBottom: 8 }}>🚨 위험요소</div>
+                {merged.risks.map((r, i) => <div key={i} style={{ fontSize: 13, padding: "4px 0" }}>⚠️ {r}</div>)}
+              </div>
+            )}
+
+            {/* AI 권리분석 */}
+            {regText.trim() && (<>
+              {!analysis ? (
+                <button style={{ ...s.btnSecondary, background: "rgba(100,160,255,0.1)", borderColor: "rgba(100,160,255,0.3)", color: "#7ab3ff" }} onClick={handleAIRegistry} disabled={aiParsing}>{aiParsing ? "⟳ 분석 중..." : "🤖 AI 등기부 종합분석"}</button>
+              ) : (
+                <div style={{ ...s.resultBox, background: "rgba(100,160,255,0.04)", border: "1px solid rgba(100,160,255,0.15)" }}>{analysis}</div>
+              )}
+            </>)}
+          </>)}
+
+          <button style={{ ...s.btnPrimary, marginTop: 20 }} onClick={handleGenerate}>카톡 발송 양식 생성</button>
+        </>)}
+
         {/* === 발송양식 === */}
         {mode === "output" && (<>
           <div style={s.section}>◆ 카톡 발송 양식</div><div style={s.divider} />
-          <div id="out-text" style={{ ...s.resultBox, userSelect: "text", WebkitUserSelect: "text" }}>{output}</div>
+          <div style={{ ...s.resultBox, userSelect: "text", WebkitUserSelect: "text" }}>{output}</div>
           <button style={s.btnPrimary} onClick={handleCopy}>{copied ? "✓ 복사 완료!" : "클립보드에 복사"}</button>
           <button style={s.btnSecondary} onClick={() => setMode("review")}>수정하기</button>
           <button style={{ ...s.btnSecondary, color: textMuted }} onClick={handleReset}>새 물건 접수</button>
