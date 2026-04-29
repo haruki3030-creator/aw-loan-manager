@@ -230,7 +230,7 @@ function parseKakao(raw) {
   if (/신탁/.test(joined) && !/신탁.*해제|귀속|말소/.test(joined)) notes.push("신탁");
   if (/환매/.test(joined)) notes.push("환매특약");
   const ageM = joined.match(/(\d+)\s*년차/); if (ageM) notes.push(ageM[1] + "년차");
-  const owM = joined.match(/소유권이전일?\s*[:\s]\s*(20[\d년월일.\s]+)/); if (owM) notes.push("소유권이전 " + owM[1].trim());
+  const owM = joined.match(/소유권이전일?\s*[:\s]\s*(20[\d년월일.\s]+)/); if (owM) { notes.push("소유권이전 " + owM[1].trim()); d.transferDate = owM[1].trim(); }
   if (/지분\s*대출|지분.*검토/.test(joined)) notes.push("지분대출 검토 요청");
   if (/배우자\s*공동/.test(joined)) notes.push("배우자 공동소유");
   const kbNameM = joined.match(/KB상\s*물건지명[:\s]*([가-힣\d().\-]+)/); if (kbNameM) notes.push("KB: " + kbNameM[1]);
@@ -822,12 +822,22 @@ export default function Home() {
       // 등기부 정규식 먼저
       if (regText.trim() && !regParsed) { const rp = parseRegistry(regText); setRegParsed(rp); }
 
+      // 등기부는 첫장(표제부)+마지막장(요약)만 AI에 전달
+      let slimRegistry = undefined;
+      if (regText.trim()) {
+        const summaryIdx = regText.search(/주요\s*등기\s*사항\s*요약/);
+        const gapguIdx = regText.search(/【\s*갑\s*구\s*】|갑\s*구/);
+        const firstPage = regText.slice(0, gapguIdx > 0 ? gapguIdx : 1200);
+        const summaryPage = summaryIdx > -1 ? regText.slice(summaryIdx) : "";
+        slimRegistry = (firstPage + "\n---\n" + summaryPage).slice(0, 2000);
+      }
+
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 22000);
+      const timeout = setTimeout(() => controller.abort(), 9500);
       const res = await fetch("/api/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: kakaoText.slice(0, 2500), registryText: regText.trim() ? regText.slice(0, 4000) : undefined }),
+        body: JSON.stringify({ text: kakaoText.slice(0, 2500), registryText: slimRegistry }),
         signal: controller.signal,
       });
       clearTimeout(timeout);
