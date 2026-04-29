@@ -1641,15 +1641,19 @@ function BulkTab({ bulkText, setBulkText, bulkResults, setBulkResults, bulkLoadi
     }
 
     var deals = [], pendingMemo = "";
+    function hasDealMarker(b) {
+      return /\[(?:아파트|빌라|연립|다세대|빌라연립다세대|오피스텔|주상복합|단독|다가구|도생|도시형|재건축)/.test(b)
+        || (SIDO.test(b) && /시세|kb|KB|기대출|선순위|순위|근저당|대출|한도|대환/i.test(b))
+        || (/[가-힣]{2,4}\s*[\/\s]\s*\d{6}/.test(b) && SIDO.test(b))
+        || /\d{6}\s*[-]\s*[1-49]/.test(b);
+    }
     for (var bi = 0; bi < blocks.length; bi++) {
       var block = blocks[bi];
       if (/^파일:/.test(block)) continue;
       if (/^(사진|이모티콘|동영상|음성메시지)$/.test(block)) continue;
-      if (/^★/.test(block)) { pendingMemo = block; continue; }
-      var isDeal = /\[(?:아파트|빌라|연립|다세대|빌라연립다세대|오피스텔|주상복합|단독|다가구|도생|도시형|재건축)/.test(block)
-        || (SIDO.test(block) && /시세|kb|KB|기대출|선순위|순위|근저당|대출|한도|대환/i.test(block))
-        || (/[가-힣]{2,4}\s*[\/\s]\s*\d{6}/.test(block) && SIDO.test(block))
-        || (/\d{6}\s*[-]\s*[1-49]/.test(block) && /\d/.test(block));
+      // ★로 시작하고 거래 정보가 없으면 메모, 있으면 거래(메모+거래 합본) 처리
+      if (/^★/.test(block) && !hasDealMarker(block)) { pendingMemo = block; continue; }
+      var isDeal = hasDealMarker(block);
       if (isDeal) {
         deals.push(pendingMemo ? pendingMemo + "\n" + block : block);
         pendingMemo = "";
