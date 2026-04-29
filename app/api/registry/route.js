@@ -83,13 +83,13 @@ ${kb ? `시세: ${kb}` : ""}
 등기부:
 ${analysisText.slice(0, 3500)}`;
 
-    const models = ["gemini-2.5-flash-lite", "gemini-2.5-flash"];
+    const models = ["gemini-2.5-pro", "gemini-2.5-flash"];
     let lastErr = "";
 
     for (const model of models) {
       try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 20000);
+        const timeout = setTimeout(() => controller.abort(), 25000);
 
         const res = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
