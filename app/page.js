@@ -601,7 +601,13 @@ function aiToInternal(ai) {
 
   d.amount = ai.amount || "";
   d.purpose = ai.purpose || "";
-  d.special = (ai.special || "").split(/\s*[\/,]\s*/).filter(s => !/https?:\/\/|kbland|한도\s*요청|가능사.*확인/.test(s)).join(" / ");
+  d.special = (ai.special || "").split(/\s*[\/,]\s*/).filter(s => {
+    if (!s.trim()) return false;
+    if (/https?:\/\//.test(s)) return false;
+    if (/kbland|KB시세\s*조회/.test(s)) return false;
+    if (/한도\s*요청|가능사.*확인|최대.*요청/.test(s)) return false;
+    return true;
+  }).join(" / ");
   d.note = ai.note || "";
 
   // 등기부 (AI가 함께 분석한 경우)
@@ -743,7 +749,7 @@ function toOutput(d) {
   if (d.credit) o += `신용: ${d.credit}\n`;
   o += "\n▶ 담보물\n";
   if (d.address) o += `주소: ${d.address}\n`;
-  if (d.addressRegistry) { const label = /[가-힣]+(?:로|길)\s*\d/.test(d.addressRegistry) ? "도로명" : "지번"; o += `${label}: ${d.addressRegistry}\n`; }
+  if (d.addressRegistry && d.addressRegistry !== d.address) { const label = /[가-힣\d]+(?:로|길)\s*\d/.test(d.addressRegistry) ? "도로명" : "지번"; o += `${label}: ${d.addressRegistry}\n`; }
   if (d.kb) o += `시세: ${d.kb}\n`;
   o += "\n";
   if (d.special || d.note || (d.risks || []).length > 0) {
