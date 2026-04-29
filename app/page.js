@@ -1015,23 +1015,71 @@ export default function Home() {
     return null;
   }
 
+  // 주소에서 단지명 추출: "논현동 749-1 논현센트럴뷰 제401동 제6층 제604호" → "논현센트럴뷰"
+  function extractAptName(addr) {
+    if (!addr) return "";
+    // 패턴1: 지번(123-45) 뒤 단지명 + 동
+    let m = addr.match(/\d+(?:-\d+)?\s+([가-힣A-Za-z0-9·]+(?:\s[가-힣A-Za-z0-9·]+)?)\s+제?\d+\s*동/);
+    if (m) return m[1].replace(/\s+/g, "");
+    // 패턴2: 동/호 직전 한글 단어
+    m = addr.match(/([가-힣A-Za-z0-9·]{3,})\s+(?:제\s*)?\d+\s*동\s*(?:제\s*)?\d+\s*층/);
+    if (m) return m[1];
+    // 패턴3: 알려진 브랜드 키워드 포함 단어
+    m = addr.match(/([가-힣A-Za-z0-9·]*(?:센트럴|자이|푸르지오|아이파크|래미안|힐스테이트|더샵|이편한|이안|롯데캐슬|위브|아너스|파크리오|한신|뷰|타운|마을|타워|팰리스|에이치|엘에이치)[가-힣A-Za-z0-9·]*)/);
+    if (m) return m[1];
+    return "";
+  }
+
+  // 면적 문자열에서 숫자 추출: "59.84㎡" → 59.84
+  function parseArea(s) {
+    if (!s) return 0;
+    const m = String(s).match(/([\d.]+)/);
+    return m ? parseFloat(m[1]) : 0;
+  }
+
   async function fetchPrice(address) {
     const found = findLawdCd(address);
     if (!found) { showToast("법정동코드 매핑 실패 — 주소 확인"); return; }
     setPriceLoading(true);
     try {
       const now = new Date();
-      const months = [0, 1].map((offset) => {
+      // 6개월 조회
+      const months = [0, 1, 2, 3, 4, 5].map((offset) => {
         const d = new Date(now.getFullYear(), now.getMonth() - offset, 1);
         return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}`;
       });
+      const aptHint = extractAptName(address);
+      const targetArea = parseArea(merged.area);
+
       const results = await Promise.all(months.map((ym) =>
-        fetch("/api/price", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lawdCd: found.code, dealYmd: ym }) }).then((r) => r.json())
+        fetch("/api/price", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lawdCd: found.code, dealYmd: ym, targetArea, aptHint }) }).then((r) => r.json())
       ));
       const allItems = results.flatMap((r) => r.items || []);
-      const summary = results[0]?.summary || [];
-      setPriceData({ items: allItems, summary, region: found.name });
-      showToast(`실거래가 ${allItems.length}건 (${found.name})`);
+      const allMatched = results.flatMap((r) => r.matched || []);
+      // 매칭은 최신순 정렬
+      allMatched.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+
+      // 6개월 통합 면적별 요약 재계산
+      const areaGroups = {};
+      for (const item of allItems) {
+        if (item.cancel) continue;
+        const k = Math.round(item.area);
+        if (!areaGroups[k]) areaGroups[k] = [];
+        areaGroups[k].push(parseInt((item.amount || "0").replace(/,/g, "")) || 0);
+      }
+      const summary = Object.entries(areaGroups)
+        .sort((a, b) => b[1].length - a[1].length)
+        .slice(0, 5)
+        .map(([area, prices]) => ({
+          area: parseInt(area),
+          pyeong: Math.round(parseInt(area) / 3.305),
+          count: prices.length,
+          avg: Math.round(prices.reduce((a, b) => a + b, 0) / prices.length),
+        }));
+
+      setPriceData({ items: allItems, matched: allMatched, summary, region: found.name, aptHint, targetArea });
+      const matchMsg = allMatched.length > 0 ? ` · 매칭 ${allMatched.length}건` : "";
+      showToast(`실거래가 ${allItems.length}건 (${found.name}, 6개월)${matchMsg}`);
     } catch (err) {
       showToast("실거래가 조회 실패: " + err.message);
     } finally {
@@ -1198,8 +1246,53 @@ export default function Home() {
 
             {priceData && (<>
               <div style={{ fontSize: 11, color: textMuted, marginTop: 6, marginBottom: 8 }}>
-                📍 {priceData.region} · 최근 2개월 {priceData.items.length}건
+                📍 {priceData.region} · 최근 6개월 {priceData.items.length}건{priceData.aptHint ? ` · 단지: ${priceData.aptHint}` : ""}{priceData.targetArea ? ` · 기준 ${priceData.targetArea}㎡` : ""}
               </div>
+
+              {/* 같은 단지·같은 평수 매칭 (최상단 강조) */}
+              {priceData.matched && priceData.matched.length > 0 && (
+                <div style={{ background: "rgba(212,168,67,0.08)", border: `2px solid ${gold}`, borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
+                  <div style={{ fontSize: 12, color: goldLight, fontWeight: 700, marginBottom: 8 }}>
+                    🎯 같은 단지·같은 평수 매칭 ({priceData.matched.length}건)
+                  </div>
+                  <div style={{ maxHeight: 220, overflowY: "auto" }}>
+                    {priceData.matched.map((item, i) => (
+                      <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 4px", borderBottom: "1px solid rgba(212,168,67,0.15)", fontSize: 12 }}>
+                        <div>
+                          <span style={{ color: "#e0dcd0", fontWeight: 700 }}>{item.aptNm}</span>
+                          <span style={{ color: textMuted, marginLeft: 6 }}>{item.area}㎡ {item.floor}층</span>
+                        </div>
+                        <div style={{ textAlign: "right" }}>
+                          <span style={{ color: gold, fontWeight: 700 }}>{item.amount ? (parseInt(item.amount.replace(/,/g,"")) / 10000).toFixed(2) + "억" : "—"}</span>
+                          <span style={{ color: textMuted, marginLeft: 6, fontSize: 11 }}>{item.date}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {priceData.matched.length > 0 && (() => {
+                    const prices = priceData.matched.filter(x => !x.cancel).map(x => parseInt((x.amount||"0").replace(/,/g,""))||0).filter(x => x > 0);
+                    if (prices.length === 0) return null;
+                    const avg = Math.round(prices.reduce((a,b) => a+b, 0) / prices.length);
+                    const max = Math.max(...prices);
+                    const min = Math.min(...prices);
+                    return (
+                      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, paddingTop: 8, borderTop: `1px solid ${border}`, fontSize: 12 }}>
+                        <span style={{ color: textMuted }}>평균 <span style={{ color: gold, fontWeight: 700 }}>{(avg/10000).toFixed(2)}억</span> · 최고 {(max/10000).toFixed(2)}억 · 최저 {(min/10000).toFixed(2)}억</span>
+                        <button
+                          style={{ padding: "3px 10px", background: gold, border: "none", borderRadius: 4, color: navy, fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+                          onClick={() => { setMerged({ ...merged, kb: String(avg), actualPrice: avg }); showToast("매칭 평균 적용"); }}
+                        >매칭 평균 적용</button>
+                      </div>
+                    );
+                  })()}
+                </div>
+              )}
+
+              {priceData.matched && priceData.matched.length === 0 && (priceData.aptHint || priceData.targetArea) && (
+                <div style={{ background: "rgba(255,80,80,0.05)", border: "1px solid rgba(255,80,80,0.2)", borderRadius: 8, padding: "8px 12px", marginBottom: 10, fontSize: 12, color: "#ff9b9b" }}>
+                  ⚠️ 같은 단지·같은 평수 매칭 0건 (6개월) — 아래 면적별 요약 참고
+                </div>
+              )}
 
               {priceData.summary.length > 0 && (
                 <div style={{ background: "rgba(100,160,255,0.05)", border: "1px solid rgba(100,160,255,0.15)", borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>

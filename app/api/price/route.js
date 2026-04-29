@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 export async function POST(req) {
   try {
-    const { lawdCd, dealYmd } = await req.json();
+    const { lawdCd, dealYmd, targetArea, aptHint } = await req.json();
     const key = process.env.MOLIT_KEY;
     if (!key) return NextResponse.json({ error: "MOLIT_KEY 미설정" }, { status: 500 });
 
@@ -11,7 +11,6 @@ export async function POST(req) {
     const res = await fetch(url);
     const xml = await res.text();
 
-    // resultCode 체크 (XML 응답 내 에러 처리)
     const resultCode = xml.match(/<resultCode>([\s\S]*?)<\/resultCode>/);
     if (resultCode && resultCode[1].trim() !== "00" && resultCode[1].trim() !== "000") {
       const resultMsg = xml.match(/<resultMsg>([\s\S]*?)<\/resultMsg>/);
@@ -45,10 +44,29 @@ export async function POST(req) {
         area: parseFloat(area) || 0,
         floor,
         amount: amount.replace(/,/g, "").trim(),
-        date: `${year}.${month}.${day}`,
+        date: `${year}.${month.padStart(2,"0")}.${day.padStart(2,"0")}`,
         gbn,
         cancel: cancel === "O",
       });
+    }
+
+    // 같은 단지·같은 평수 매칭
+    const matched = [];
+    if (targetArea || aptHint) {
+      const ta = parseFloat(targetArea) || 0;
+      const hint = (aptHint || "").replace(/\s+/g, "");
+      for (const item of items) {
+        if (item.cancel) continue;
+        const aptKey = (item.aptNm || "").replace(/\s+/g, "");
+        const areaOk = ta > 0 ? Math.abs(item.area - ta) <= 2 : true;
+        const aptOk = hint ? (aptKey.includes(hint) || hint.includes(aptKey)) : true;
+        // hint가 있으면 단지+면적 둘 다 일치, hint 없으면 면적만 일치
+        if (hint) {
+          if (areaOk && aptOk) matched.push(item);
+        } else if (ta > 0 && areaOk) {
+          matched.push(item);
+        }
+      }
     }
 
     const areaGroups = {};
@@ -69,7 +87,7 @@ export async function POST(req) {
         avg: Math.round(prices.reduce((a, b) => a + b, 0) / prices.length),
       }));
 
-    return NextResponse.json({ totalCount, items: items.slice(0, 50), summary });
+    return NextResponse.json({ totalCount, items: items.slice(0, 100), matched, summary });
   } catch (err) {
     return NextResponse.json({ error: err.message }, { status: 500 });
   }
