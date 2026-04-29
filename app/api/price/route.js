@@ -6,17 +6,18 @@ export async function POST(req) {
     const key = process.env.MOLIT_KEY;
     if (!key) return NextResponse.json({ error: "MOLIT_KEY 미설정" }, { status: 500 });
 
-    const url = new URL("https://apis.data.go.kr/1613000/RTMSOBJSvc/getRTMSDataSvcAptTrade");
-    url.searchParams.set("serviceKey", key);
-    url.searchParams.set("LAWD_CD", lawdCd);
-    url.searchParams.set("DEAL_YMD", dealYmd);
-    url.searchParams.set("numOfRows", "100");
-    url.searchParams.set("pageNo", "1");
+    const url = `http://apis.data.go.kr/1613000/RTMSDataSvcAptTradeDev/getRTMSDataSvcAptTradeDev?serviceKey=${encodeURIComponent(key)}&LAWD_CD=${lawdCd}&DEAL_YMD=${dealYmd}&numOfRows=1000&pageNo=1`;
 
-    const res = await fetch(url.toString());
-    if (!res.ok) return NextResponse.json({ error: `MOLIT API ${res.status}` }, { status: 500 });
-
+    const res = await fetch(url);
     const xml = await res.text();
+
+    // resultCode 체크 (XML 응답 내 에러 처리)
+    const resultCode = xml.match(/<resultCode>([\s\S]*?)<\/resultCode>/);
+    if (resultCode && resultCode[1].trim() !== "00" && resultCode[1].trim() !== "000") {
+      const resultMsg = xml.match(/<resultMsg>([\s\S]*?)<\/resultMsg>/);
+      const errAuth = xml.match(/<returnAuthMsg>([\s\S]*?)<\/returnAuthMsg>/);
+      return NextResponse.json({ error: `MOLIT: ${errAuth ? errAuth[1].trim() : (resultMsg ? resultMsg[1].trim() : 'unknown')}` }, { status: 500 });
+    }
 
     const totalMatch = xml.match(/<totalCount>(\d+)<\/totalCount>/);
     const totalCount = totalMatch ? parseInt(totalMatch[1]) : 0;
