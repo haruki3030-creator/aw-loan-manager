@@ -986,7 +986,11 @@ export default function Home() {
 
   function findLawdCd(address) {
     if (!address) return null;
-    const addr = address.replace(/\s+/g, " ");
+    // 광역시/특별시/특별자치시/특별자치도/도 제거 → "인천광역시 남동구" → "인천 남동구"
+    const addr = address
+      .replace(/광역시|특별자치시|특별자치도|특별시/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
     const sorted = [...LAWD_MAP].sort((a, b) => b[0].length - a[0].length);
     for (const [name, code] of sorted) {
       if (addr.includes(name)) return { code: String(code), name };
