@@ -138,10 +138,18 @@ function parseKakao(raw) {
     }
   }
   const altSources = [
-    { pat: /하우스머치[^\d]*([\d,.]+)\s*만?/, label: "하우스머치" },
+    { pat: /하우스머치\s*(?:중|상|하)?\s*([\d,.]+)\s*만?/, label: "하우스머치" },
     { pat: /감정가[^\d]*([\d,.]+)\s*만?/, label: "감정가" },
   ];
-  for (const src of altSources) { const m = kbBlock.match(src.pat); if (m) kbParts.push(src.label + " " + m[1].replace(/,/g, "") + "만"); }
+  for (const src of altSources) {
+    const m = kbBlock.match(src.pat);
+    if (m) {
+      // "하우스머치 중" → "하우스머치(중)"
+      const subLabel = kbBlock.match(/하우스머치\s*(중|상|하)/);
+      const label = src.label === "하우스머치" && subLabel ? "하우스머치(" + subLabel[1] + ")" : src.label;
+      kbParts.push(label + " " + m[1].replace(/,/g, "") + "만");
+    }
+  }
   if (kbParts.length > 0) d.kb = kbParts.join(" / ");
 
   // 선순위
@@ -155,11 +163,23 @@ function parseKakao(raw) {
   }
   const seniorLines = [];
   const seniorNotes = [];
-  for (const line of lines) {
-    if (/^\d+\.\s*.*(금고|은행|캐피탈|저축|보험|새마을|신협|농협|수협|화재|생명|대부|해상)/.test(line)) { seniorLines.push(line.trim()); }
-    else if (/^(신한|국민|우리|하나|기업|농협|수협|SC|씨티|새마을|신협|현대|삼성|KB|카카오|토스|케이|캐피탈|미래|OK|웰컴|JT|SBI|아프로|페퍼|OSB)\s*[:\s]*[\d,.]+/.test(line)) { seniorLines.push(line.trim()); }
+  let afterGidaechul = false;
+  for (let idx = 0; idx < lines.length; idx++) {
+    const line = lines[idx];
+    // "기대출 :" 헤더 감지 → 다음 줄들이 기대출 상세
+    if (/^기대출\s*[:\s]*$/.test(line)) { afterGidaechul = true; continue; }
+    // 빈 줄이나 다른 섹션 헤더 만나면 기대출 영역 끝
+    if (afterGidaechul && /^(특이사항|시세|주소|직업|필요|요청|용도)\s*[:\s]/.test(line)) { afterGidaechul = false; }
+
+    // 번호형: "1. 새마을금고 66,000만 ..."
+    if (/^\d+\.\s*.*(금고|은행|캐피탈|저축|보험|새마을|신협|농협|수협|화재|생명|대부|해상)/.test(line)) { seniorLines.push(line.trim()); continue; }
+    // 금융사명 시작 + 금액: "신한 : 35400" "현대해상 - 26.500"
+    if (/^(신한|국민|우리|하나|기업|농협|수협|SC|씨티|새마을|신협|현대|삼성|KB|카카오|토스|케이|캐피탈|미래|OK|웰컴|JT|SBI|아프로|페퍼|OSB|현대해상|한화|롯데|IBK|BNK|DGB|수산|산업|수출입)[\s가-힣]*\s*[-:]\s*[\d,.]+/.test(line)) { seniorLines.push(line.trim()); continue; }
     // "미래대부 1,500" 같은 단순 패턴
-    else if (/^[가-힣A-Za-z]+(?:대부|캐피탈|저축|금고)\s+[\d,.]+/.test(line)) { seniorLines.push(line.trim()); }
+    if (/^[가-힣A-Za-z]+(?:대부|캐피탈|저축|금고)\s+[\d,.]+/.test(line)) { seniorLines.push(line.trim()); continue; }
+    // "기대출" 헤더 뒤 금액 있는 줄
+    if (afterGidaechul && /[\d,.]+/.test(line) && !/^(시세|KB|kb|주소|직업|월|필요|요청)/i.test(line)) { seniorLines.push(line.trim()); continue; }
+
     const noteM = line.match(/\(([가-힣\s]+(?:채무|대출|금거|가능|필요|예정|확인|부탁)[가-힣\s]*)\)/);
     if (noteM) seniorNotes.push(noteM[1].trim());
   }
@@ -232,6 +252,29 @@ function parseKakao(raw) {
   if (ageM) notes.push(ageM[1] + "년차");
   const owM = joined.match(/소유권이전일?[:\s]*([\d년월일.\s]+)/); if (owM) notes.push("소유권이전 " + owM[1].trim());
 
+  // "특이사항 :" 섹션 내용 캡처
+  let afterSpecial = false;
+  for (const line of lines) {
+    if (/^특이사항\s*[:\s]*$/.test(line)) { afterSpecial = true; continue; }
+    if (afterSpecial && /^(기대출|시세|주소|직업|유형)\s*[:\s]/.test(line)) { afterSpecial = false; continue; }
+    if (afterSpecial && line.length > 2) {
+      // 급여/신용 줄은 이미 별도 파싱 → 스킵
+      if (/월\s*급여|KCB|NICE|kcb|nice|나이스/.test(line)) continue;
+      // "추가 한도 부탁" → 요청으로
+      if (/추가.*한도|추가.*부탁|한도.*부탁/.test(line) && !d.amount) {
+        d.amount = line.trim();
+      }
+      // "대환희망" → 용도
+      else if (/대환/.test(line)) {
+        notes.push(line.trim());
+        if (!d.purpose) d.purpose = "대환";
+      }
+      else {
+        notes.push(line.trim());
+      }
+    }
+  }
+
   if (notes.length) d.special = (d.special ? d.special + " / " : "") + notes.join(" / ");
   return d;
 }
@@ -257,7 +300,7 @@ function parseRegistry(rawText) {
   const jeonyu = rawText.match(/전유부분의\s*건물의\s*표시[\s\S]*?(?=대지권|갑\s*구|$)/);
   if (jeonyu) {
     const jyArea = jeonyu[0].match(/([\d.]+)\s*㎡/);
-    if (jyArea && parseFloat(jyArea[1]) > 10 && parseFloat(jyArea[1]) < 300) r.area = jyArea[1] + "㎡";
+    if (jyArea && parseFloat(jyArea[1]) > 10 && parseFloat(jyArea[1]) < 300) r.area = parseFloat(jyArea[1]).toFixed(2) + "㎡";
   }
   if (!r.area) {
     const arm = j.match(/(?:전용면적|전용|면적)\s*([\d.]+)\s*㎡/);
@@ -519,6 +562,15 @@ export default function Home() {
       for (const k of Object.keys(EMPTY)) { if (parsed[k] && parsed[k] !== "") m[k] = String(parsed[k]); }
       if (/빌라|다세대/.test(m.type)) m.type = "빌라/다세대";
       if (/단독|다가구/.test(m.type)) m.type = "단독/다가구";
+      // AI 결과 정규화
+      if (m.salary && !/만|원/.test(m.salary)) m.salary = m.salary + "만";
+      if (m.credit && !/점|등급/.test(m.credit)) {
+        if (/\d{3,4}$/.test(m.credit)) m.credit = m.credit + "점";
+        else if (/\d{1,2}$/.test(m.credit)) m.credit = m.credit + "등급";
+      }
+      if (m.amount && /^\d+$/.test(m.amount) && parseInt(m.amount) > 100) m.amount = m.amount + "만";
+      // 시세와 요청 혼동 체크: 시세 숫자가 요청으로 들어간 경우
+      if (m.kb && m.amount && m.kb.replace(/[^\d]/g, "") === m.amount.replace(/[^\d]/g, "")) m.amount = "";
       setKakaoParsed(m);
       const merged2 = mergeData(m, regParsed); setMerged(merged2); setMode("review");
       showToast("AI 분석 완료!");
