@@ -39,14 +39,16 @@ export async function POST(req) {
 
     let hintBlock = "";
     if (hint) {
-      hintBlock = `\n\n정규식 사전 분석 결과 (정확도 높음, 반드시 참고):
+      hintBlock = `\n\n정규식 사전 분석 결과 (★최우선 신뢰. 아래 값을 그대로 결과에 반영. "미확인"으로 덮어쓰지 말 것):
 - 소유자: ${hint.owners || "미확인"}
-- 소유권이전: ${hint.transferDate || "미확인"} ${hint.transferCause || ""} ${hint.tradePrice ? "거래가 " + hint.tradePrice : ""}
-- 전용면적: ${hint.area || "미확인"}, ${hint.totalFloors || "?"} / ${hint.unitFloor || "?"}
+- 소유권이전: ${hint.transferDate || "미확인"}${hint.transferCause ? " (" + hint.transferCause + ")" : ""}${hint.tradePrice ? " / 거래가 " + hint.tradePrice : ""}
+- 전용면적: ${hint.area || "미확인"}, 총 ${hint.totalFloors || "?"}층 / 해당 ${hint.unitFloor || "?"}층
 - 갑구 상태: ${hint.gapgu || "미확인"}
 - 을구 상태: ${hint.eulgu || "미확인"}
 - 유효 근저당: ${hint.mortgages || "없음"}
-- 위험 플래그: ${hint.risks || "없음"}`;
+- 위험 플래그: ${hint.risks || "없음"}
+
+★ 위 값 중 "미확인"이 아닌 것은 결과의 해당 항목에 그대로 채워라.`;
     }
 
     const analysisText = summary || text;

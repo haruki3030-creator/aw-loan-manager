@@ -461,6 +461,23 @@ function parseRegistry(rawText) {
       if (priceM) r.tradePrice = Math.round(parseInt(priceM[1].replace(/,/g, "")) / 10000);
     }
 
+    // 폴백: ownerRank 검출 실패 또는 위 패턴 매칭 실패 시 → 가장 마지막 소유권이전 찾기
+    if (!r.transferDate) {
+      const allTransfers = [...rawText.matchAll(/소유권이전[\s\S]{0,200}?(20\d{2}년\s*\d{1,2}월\s*\d{1,2}일)[\s\S]{0,300}?(매매|상속|증여|경매|강제경매로\s*인한\s*매각|신탁|판결|협의분할)/g)];
+      if (allTransfers.length > 0) {
+        const last = allTransfers[allTransfers.length - 1];
+        r.transferDate = last[1].replace(/\s/g, "");
+        r.transferCause = last[2].replace(/강제경매로\s*인한\s*매각/, "경매");
+      }
+    }
+    if (!r.tradePrice) {
+      const allPrices = [...rawText.matchAll(/소유권이전[\s\S]{0,500}?거래가액\s*금?\s*([\d,]+)\s*원/g)];
+      if (allPrices.length > 0) {
+        const lastP = allPrices[allPrices.length - 1];
+        r.tradePrice = Math.round(parseInt(lastP[1].replace(/,/g, "")) / 10000);
+      }
+    }
+
     // 1-3. 갑구 "기록사항 없음" 체크
     const gapguSummary = summary.match(/소유지분을\s*제외한[\s\S]*?(?=3\.\s*\(근\)|$)/);
     if (gapguSummary && /기록사항\s*없음/.test(gapguSummary[0])) r.summaryCleanGapgu = true;
