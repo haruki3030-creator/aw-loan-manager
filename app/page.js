@@ -791,6 +791,8 @@ export default function Home() {
   const [aiParsing, setAiParsing] = useState(false);
   const [analysis, setAnalysis] = useState("");
   const [aiModel, setAiModel] = useState("");
+  const [priceData, setPriceData] = useState(null);
+  const [priceLoading, setPriceLoading] = useState(false);
   const fileRef = useRef(null);
   const [bulkText, setBulkText] = useState("");
   const [bulkResults, setBulkResults] = useState(null);
@@ -954,6 +956,68 @@ export default function Home() {
   const RANKS = ["1순위", "2순위", "3순위"];
   const LTYPES = ["일반담보", "분양담보", "후순위", "동시설정", "대환", "매매잔금", "생활안정자금", "전세퇴거자금", "기타"];
 
+  // 법정동코드 매핑 (실거래가 API용)
+  const LAWD_MAP = [
+    // 서울
+    ["강남구",11680],["서초구",11650],["송파구",11710],["강동구",11740],["강서구",11500],
+    ["구로구",11530],["금천구",11545],["관악구",11620],["동작구",11590],["영등포구",11560],
+    ["마포구",11440],["서대문구",11410],["은평구",11380],["종로구",11110],["중구",11140],
+    ["용산구",11170],["성동구",11200],["광진구",11215],["동대문구",11230],["중랑구",11260],
+    ["성북구",11290],["강북구",11305],["도봉구",11320],["노원구",11350],["양천구",11470],
+    // 경기
+    ["수원",41111],["성남",41131],["안양",41171],["부천",41190],["광명",41210],
+    ["평택",41220],["안산",41270],["고양",41281],["과천",41290],["의왕",41430],
+    ["군포",41410],["시흥",41390],["용인",41461],["파주",41480],["이천",41500],
+    ["화성",41590],["광주",41610],["양주",41630],["포천",41650],["의정부",41150],
+    ["남양주",41360],["구리",41310],["하남",41450],["김포",41570],
+    // 인천
+    ["인천 남동구",28200],["인천 연수구",28185],["인천 부평구",28237],
+    ["인천 계양구",28245],["인천 서구",28260],["인천 미추홀구",28177],
+    // 5대 광역시
+    ["부산 해운대구",26350],["부산 남구",26290],["부산 동래구",26260],
+    ["부산 수영구",26500],["부산 북구",26320],["부산 사하구",26380],
+    ["대구 중구",27110],["대구 수성구",27260],["대구 달서구",27290],
+    ["대구 북구",27230],["대구 동구",27140],
+    ["광주 북구",29200],["광주 서구",29140],["광주 남구",29155],
+    ["대전 서구",30170],["대전 유성구",30200],["대전 중구",30110],
+    ["울산 남구",31140],["울산 북구",31170],
+    ["세종",36110],
+  ];
+
+  function findLawdCd(address) {
+    if (!address) return null;
+    const addr = address.replace(/\s+/g, " ");
+    const sorted = [...LAWD_MAP].sort((a, b) => b[0].length - a[0].length);
+    for (const [name, code] of sorted) {
+      if (addr.includes(name)) return { code: String(code), name };
+    }
+    return null;
+  }
+
+  async function fetchPrice(address) {
+    const found = findLawdCd(address);
+    if (!found) { showToast("법정동코드 매핑 실패 — 주소 확인"); return; }
+    setPriceLoading(true);
+    try {
+      const now = new Date();
+      const months = [0, 1].map((offset) => {
+        const d = new Date(now.getFullYear(), now.getMonth() - offset, 1);
+        return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}`;
+      });
+      const results = await Promise.all(months.map((ym) =>
+        fetch("/api/price", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ lawdCd: found.code, dealYmd: ym }) }).then((r) => r.json())
+      ));
+      const allItems = results.flatMap((r) => r.items || []);
+      const summary = results[0]?.summary || [];
+      setPriceData({ items: allItems, summary, region: found.name });
+      showToast(`실거래가 ${allItems.length}건 (${found.name})`);
+    } catch (err) {
+      showToast("실거래가 조회 실패: " + err.message);
+    } finally {
+      setPriceLoading(false);
+    }
+  }
+
   // LTV 계산
   const ltv = calcLTV(merged);
 
@@ -1100,6 +1164,56 @@ export default function Home() {
           <div style={s.fieldGroup}><label style={s.label}>주소</label><input style={s.input} value={merged.address} onChange={set("address")} /></div>
           {merged.addressRegistry && <div style={s.fieldGroup}><label style={s.label}>지번 <span style={s.sourceTag("reg")}>등기부</span></label><input style={{ ...s.input, fontSize: 12, color: textMuted }} value={merged.addressRegistry} onChange={set("addressRegistry")} /></div>}
           <div style={s.fieldGroup}><label style={s.label}>시세</label><input style={s.input} value={merged.kb} onChange={set("kb")} /></div>
+
+          {/* 실거래가 자동조회 */}
+          <div style={{ marginBottom: 16 }}>
+            <button
+              style={{ width: "100%", padding: "10px", background: "rgba(100,160,255,0.08)", border: "1px solid rgba(100,160,255,0.25)", borderRadius: 8, color: "#7ab3ff", fontSize: 13, fontWeight: 600, cursor: "pointer", opacity: priceLoading ? 0.5 : 1 }}
+              onClick={() => fetchPrice(merged.address || merged.addressRegistry)}
+              disabled={priceLoading}
+            >
+              {priceLoading ? "⟳ 조회 중..." : "🏠 실거래가 자동조회 (국토부)"}
+            </button>
+
+            {priceData && (<>
+              <div style={{ fontSize: 11, color: textMuted, marginTop: 6, marginBottom: 8 }}>
+                📍 {priceData.region} · 최근 2개월 {priceData.items.length}건
+              </div>
+
+              {priceData.summary.length > 0 && (
+                <div style={{ background: "rgba(100,160,255,0.05)", border: "1px solid rgba(100,160,255,0.15)", borderRadius: 8, padding: "10px 12px", marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, color: "#7ab3ff", fontWeight: 700, marginBottom: 8 }}>면적별 시세 요약</div>
+                  {priceData.summary.map((row, i) => (
+                    <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6, fontSize: 12 }}>
+                      <span style={{ color: textMuted }}>{row.area}㎡ ({row.pyeong}평) · {row.count}건</span>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <span style={{ color: "#e0dcd0" }}>평균 {(row.avg / 10000).toFixed(1)}억</span>
+                        <button
+                          style={{ padding: "2px 8px", background: "rgba(212,168,67,0.15)", border: `1px solid ${border}`, borderRadius: 4, color: goldLight, fontSize: 11, cursor: "pointer" }}
+                          onClick={() => { setMerged({ ...merged, kb: String(row.avg), actualPrice: row.avg }); showToast("시세 적용 완료"); }}
+                        >적용</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ maxHeight: 200, overflowY: "auto", border: `1px solid ${border}`, borderRadius: 8 }}>
+                {priceData.items.slice(0, 20).map((item, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "7px 12px", borderBottom: `1px solid ${border}`, fontSize: 12, opacity: item.cancel ? 0.4 : 1, textDecoration: item.cancel ? "line-through" : "none" }}>
+                    <div>
+                      <span style={{ color: "#e0dcd0", fontWeight: 600 }}>{item.aptNm || "—"}</span>
+                      <span style={{ color: textMuted, marginLeft: 6 }}>{item.area}㎡ {item.floor}층</span>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <span style={{ color: goldLight, fontWeight: 700 }}>{item.amount ? (parseInt(item.amount.replace(/,/g,"")) / 10000).toFixed(1) + "억" : "—"}</span>
+                      <span style={{ color: textMuted, marginLeft: 6, fontSize: 11 }}>{item.date}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>)}
+          </div>
 
           <div style={s.section}>◆ 특이사항</div><div style={s.divider} />
           <div style={s.fieldGroup}><label style={s.label}>특이사항</label><textarea style={{ ...s.textarea, minHeight: 60 }} value={merged.special} onChange={set("special")} /></div>
