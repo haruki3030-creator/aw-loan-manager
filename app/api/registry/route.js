@@ -100,7 +100,7 @@ ${analysisText.slice(0, 3500)}`;
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               contents: [{ parts: [{ text: prompt }] }],
-              generationConfig: { temperature: 0, maxOutputTokens: 1500 },
+              generationConfig: { temperature: 0, maxOutputTokens: 1500, thinkingConfig: { thinkingBudget: 0 } },
             }),
             signal: controller.signal,
           }
