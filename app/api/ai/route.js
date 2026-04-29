@@ -97,14 +97,14 @@ ${registryText ? `
 카톡:
 ${text.slice(0, 2500)}${registryText ? `\n\n등기부등본:\n${registryText.slice(0, 4000)}` : ""}`;
 
-    // 등기부 포함 시 Pro 사용 (정확도 우선), 카톡만이면 flash (속도 우선)
-    const models = registryText ? ["gemini-2.5-pro", "gemini-2.5-flash"] : ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+    // Vercel Hobby 10초 제한 → flash만 사용
+    const models = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
     let lastErr = "";
 
     for (const model of models) {
       try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), registryText ? 25000 : 20000);
+        const timeout = setTimeout(() => controller.abort(), 9000);
 
         const res = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
