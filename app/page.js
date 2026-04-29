@@ -396,161 +396,134 @@ function calcLTV(data) {
 }
 
 // ========================
-// 등기부 정규식 파서 (v3 — 주요등기사항 요약 우선 + 크로스 말소 체크)
+// 등기부 정규식 파서 (v4 — 첫 장(표제부) + 마지막 장(요약) 전략)
 // ========================
 function parseRegistry(rawText) {
   const r = { address: "", type: "", area: "", totalFloors: "", unitFloor: "", landRight: "", owners: [], mortgages: [], risks: [], transferDate: "", transferCause: "", summaryCleanGapgu: false, summaryCleanEulgu: false };
 
-  // ★ 핵심: 주요등기사항 요약 섹션 먼저 읽기
+  // ============================================
+  // PART 1: 마지막 장 — 주요등기사항 요약 (권리 판단의 핵심)
+  // ============================================
   const summarySection = rawText.match(/주요\s*등기\s*사항\s*요약[\s\S]*/);
   if (summarySection) {
     const summary = summarySection[0];
-    // 갑구 "기록사항 없음" 체크
-    const gapguSummary = summary.match(/소유지분을\s*제외한[\s\S]*?(?=3\.|$)/);
-    if (gapguSummary && /기록사항\s*없음/.test(gapguSummary[0])) r.summaryCleanGapgu = true;
-    // 을구 "기록사항 없음" 체크
-    const eulguSummary = summary.match(/저당권\s*및\s*전세권[\s\S]*?(?=\[|$)/);
-    if (eulguSummary && /기록사항\s*없음/.test(eulguSummary[0])) r.summaryCleanEulgu = true;
-    // 소유자 (요약에서 추출 — 가장 정확)
+
+    // 1-1. 소유자 (가장 정확한 출처)
     const ownerMatches = [...summary.matchAll(/([가-힣]{2,4})\s*\((소유자|공유자)\)\s*(\d{6}[-]?\*{0,7}\d{0,7})/g)];
     for (const m of ownerMatches) {
       r.owners.push({ name: m[1], birth: m[3].replace(/[-]*\*+$/, "").replace(/-$/, ""), role: m[2], share: "단독소유" });
     }
+    // 지분 (공동소유 시)
     if (r.owners.length > 1) {
       const shareMatches = [...summary.matchAll(/(\d+)\s*분의\s*(\d+)/g)];
       r.owners.forEach((o, i) => { if (shareMatches[i]) o.share = shareMatches[i][0]; });
     }
-  }
 
-  // 보일러플레이트 제거 (주의/참고사항)
-  let text = rawText.replace(/\[\s*주\s*의\s*사\s*항\s*\][\s\S]*?(?=고유번호|\d+\.\s*소유지분|$)/g, " ").replace(/\[\s*참\s*고\s*사\s*항\s*\][\s\S]*$/g, " ").replace(/본\s*주요\s*등기사항[\s\S]*?바랍니다\.?/g, " ").replace(/주요\s*등기\s*사항\s*요약[\s\S]*$/g, " ");
-  const j = text.replace(/\s+/g, " ").trim();
-
-  // 주소 (표제부 [집합건물]에서)
-  const addrM = j.match(/\[집합건물\]\s*((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[^1]*?제?\d+호)/);
-  if (addrM) r.address = addrM[1].replace(/\s+/g, " ").trim();
-  if (r.address.length > 120) r.address = r.address.slice(0, 120);
-
-  // 면적 (전유부분에서)
-  const jeonyu = rawText.match(/전유부분의\s*건물의\s*표시[\s\S]*?(?=대지권|갑\s*구|$)/);
-  if (jeonyu) { const jyArea = jeonyu[0].match(/([\d.]+)\s*㎡/); if (jyArea && parseFloat(jyArea[1]) > 10 && parseFloat(jyArea[1]) < 300) r.area = parseFloat(jyArea[1]).toFixed(2) + "㎡"; }
-
-  // 층수
-  const buildingDesc = rawText.match(/1동의\s*건물의\s*표시[\s\S]*?전유부분/);
-  if (buildingDesc) {
-    const floorNums = [...buildingDesc[0].matchAll(/(\d{1,2})층\s+[\d.]+㎡/g)];
-    if (floorNums.length > 0) r.totalFloors = Math.max(...floorNums.map(m => parseInt(m[1]))) + "층";
-    else { const flM = buildingDesc[0].match(/(\d+)\s*층\s*(?:공동주택|업무|근린|오피스|아파트)/); if (flM) r.totalFloors = flM[1] + "층"; }
-  }
-  const unitFloorM = j.match(/제(\d+)층\s*제\d+호/);
-  if (unitFloorM) r.unitFloor = unitFloorM[1] + "층";
-  if (/대지권/.test(j)) r.landRight = "있음";
-
-  // 소유자 (요약에서 못 찾았으면 본문에서)
-  if (r.owners.length === 0) {
-    const ownerSection = rawText.match(/1\.\s*소유지분현황[\s\S]*?(?=2\.\s*소유지분을|$)/);
-    const ownerText = ownerSection ? ownerSection[0] : j;
-    const ownerMatches2 = [...ownerText.matchAll(/([가-힣]{2,4})\s*\((소유자|공유자)\)\s*(\d{6}[-]?\*{0,7}\d{0,7})/g)];
-    for (const m of ownerMatches2) r.owners.push({ name: m[1], birth: m[3].replace(/[-]*\*+$/, "").replace(/-$/, ""), role: m[2], share: "단독소유" });
-  }
-
-  // ★ 말소된 순위번호 수집 (갑구 + 을구 전체에서)
-  const cancelledNums = new Set();
-  // "N번~등기말소" 패턴 — 복합 말소 대응
-  const cancelPatterns = [
-    /(\d+)번\s*(?:근저당권설정|가압류|가처분|압류|강제경매개시결정?|임의경매개시결정?|소유권이전)?\s*(?:등기)?\s*말소/g,
-    /(\d+)번\s*(?:근저당권설정,\s*)?(\d+)번\s*(?:근저당권설정)?\s*(?:등기)?\s*말소/g,
-  ];
-  for (const pat of cancelPatterns) {
-    let m;
-    while ((m = pat.exec(rawText)) !== null) {
-      for (let i = 1; i < m.length; i++) { if (m[i]) cancelledNums.add(parseInt(m[i])); }
+    // 1-2. 순위번호 추출 → 본문에서 해당 순위번호의 이전일/원인/거래가 찾기
+    const rankMatch = summary.match(/순위번호\s*(\d+)/);
+    if (rankMatch) {
+      const ownerRank = parseInt(rankMatch[1]);
+      // 갑구 본문에서 해당 순위번호 블록 찾기 (더 유연한 패턴)
+      // PDF.js 추출 시 "12 소유권이전" 또는 "순위번호 12" 등 다양한 형태
+      const patterns = [
+        new RegExp(`(?:순위번호\\s*)?${ownerRank}\\s+소유권이전\\s+(\\d{4}년\\s*\\d{1,2}월\\s*\\d{1,2}일)[\\s\\S]{0,200}?(매매|상속|증여|경매|강제경매로\\s*인한\\s*매각|신탁)`),
+        new RegExp(`${ownerRank}\\s+소유권이전[\\s\\S]*?(20\\d{2}년\\s*\\d{1,2}월\\s*\\d{1,2}일)[\\s\\S]{0,200}?(매매|상속|증여|경매)`),
+      ];
+      for (const pat of patterns) {
+        const m = rawText.match(pat);
+        if (m) {
+          r.transferDate = m[1].replace(/\s/g, "");
+          r.transferCause = m[2].replace(/강제경매로\s*인한\s*매각/, "경매");
+          break;
+        }
+      }
+      // 거래가액
+      const pricePattern = new RegExp(`${ownerRank}\\s+소유권이전[\\s\\S]{0,500}?거래가액\\s*금?\\s*([\\d,]+)\\s*원`);
+      const priceM = rawText.match(pricePattern);
+      if (priceM) r.tradePrice = Math.round(parseInt(priceM[1].replace(/,/g, "")) / 10000);
     }
-  }
-  // "N번강제경매개시결정, M번압류, K번임의경매개시결정등기말소" 복합 패턴
-  const complexCancel = [...rawText.matchAll(/(\d+)번\s*[가-힣]+(?:,\s*(\d+)번\s*[가-힣]+)*\s*등기\s*말소/g)];
-  for (const cm of complexCancel) {
-    const allNums = [...cm[0].matchAll(/(\d+)번/g)];
-    allNums.forEach(n => cancelledNums.add(parseInt(n[1])));
-  }
 
-  // 소유권이전 — 최종 소유자 기준 (가장 큰 순위번호)
-  const ownerTransfers = [...rawText.matchAll(/순위번호\s*(\d+)[\s\S]*?소유권이전[\s\S]*?(20\d{2}년\s*\d{1,2}월\s*\d{1,2}일)[\s\S]*?(매매|신탁|상속|증여|경매|강제경매로\s*인한\s*매각|신탁재산의귀속)/g)];
-  if (ownerTransfers.length > 0) {
-    const last = ownerTransfers[ownerTransfers.length - 1];
-    r.transferDate = last[2].replace(/\s/g, "");
-    r.transferCause = last[3].replace(/강제경매로\s*인한\s*매각/, "경매").replace(/신탁재산의귀속/, "신탁귀속");
-  }
-  // 최종 소유자 순위번호의 이전일 (더 정확)
-  if (r.owners.length > 0) {
-    const ownerName = r.owners[0].name;
-    // 뒤에서부터 찾기 — 최종 소유권이전
-    const lastTransfer = rawText.lastIndexOf("소유권이전");
-    if (lastTransfer > -1) {
-      const afterLast = rawText.slice(Math.max(0, lastTransfer - 200), lastTransfer + 300);
-      const dateM = afterLast.match(/(20\d{2}년\s*\d{1,2}월\s*\d{1,2}일)/);
-      const causeM = afterLast.match(/(매매|상속|증여|경매|강제경매로\s*인한\s*매각)/);
-      if (dateM) r.transferDate = dateM[1].replace(/\s/g, "");
-      if (causeM) r.transferCause = causeM[1].replace(/강제경매로\s*인한\s*매각/, "경매");
+    // 1-3. 갑구 "기록사항 없음" 체크
+    const gapguSummary = summary.match(/소유지분을\s*제외한[\s\S]*?(?=3\.\s*\(근\)|$)/);
+    if (gapguSummary && /기록사항\s*없음/.test(gapguSummary[0])) r.summaryCleanGapgu = true;
+
+    // 1-4. 을구 "기록사항 없음" 체크
+    const eulguSummary = summary.match(/(?:저당권|전세권)[\s\S]*?(?=\[\s*참|$)/);
+    if (eulguSummary && /기록사항\s*없음/.test(eulguSummary[0])) r.summaryCleanEulgu = true;
+
+    // 1-5. 을구에 유효 근저당이 있는 경우 (요약에서 추출)
+    if (!r.summaryCleanEulgu) {
+      // 패턴1: "채권최고액 금NNN원 ... 근저당권자 OOO"
+      const eulguEntries = [...summary.matchAll(/채권최고액\s*금?\s*([\d,]+)\s*원[\s\S]*?근저당권자\s+([가-힣()A-Za-z\s]+?)(?=\s+\d{6}|\s+채권|$)/g)];
+      for (const e of eulguEntries) {
+        const amt = parseInt(e[1].replace(/,/g, ""));
+        if (amt >= 1000000) r.mortgages.push({ holder: e[2].replace(/주식회사/g, "㈜").trim(), maxAmount: Math.round(amt / 10000), date: "" });
+      }
+      // 패턴2: 요약 테이블에서 "근저당권설정" 행
+      if (r.mortgages.length === 0) {
+        const tableEntries = [...summary.matchAll(/근저당권설정[\s\S]*?금\s*([\d,]+)\s*원[\s\S]*?(?:근저당권자|채무자)\s*([가-힣]+)/g)];
+        for (const e of tableEntries) {
+          const amt = parseInt(e[1].replace(/,/g, ""));
+          if (amt >= 1000000) r.mortgages.push({ holder: e[2].trim(), maxAmount: Math.round(amt / 10000), date: "" });
+        }
+      }
     }
-  }
 
-  // ★ 갑구 위험 — 요약에서 "기록사항 없음"이면 바로 패스
-  if (!r.summaryCleanGapgu) {
-    let gapguText = "";
-    const gapguM = rawText.match(/소유지분을\s*제외한[\s\S]*?(?=【\s*을\s*구|근\s*\)?\s*저당권\s*및|$)/i);
-    if (gapguM) gapguText = gapguM[0];
-    if (gapguText && !/기록사항\s*없음/.test(gapguText)) {
-      // 순위번호별로 분리해서 말소 체크
-      const entries = [...gapguText.matchAll(/순위번호\s*(\d+)\s*([\s\S]*?)(?=순위번호\s*\d+|$)/g)];
-      for (const entry of entries) {
-        const entryNum = parseInt(entry[1]);
-        const entryText = entry[2];
-        // 이 순위번호가 말소됐으면 스킵
-        if (cancelledNums.has(entryNum)) continue;
-        // 자체적으로 말소 등기인 경우 스킵
-        if (/말소|해제|해지/.test(entryText.slice(0, 100))) continue;
-        // 위험 체크
-        const riskDefs = [[/강제경매개시/, "강제경매개시결정"], [/임의경매개시/, "임의경매개시결정"], [/가압류/, "가압류"], [/가처분/, "가처분"], [/(?<!말소.*)\b압류\b/, "압류"], [/신탁(?!.*보험|재산)/, "신탁"], [/환매/, "환매특약"], [/예고등기/, "예고등기"], [/가등기/, "가등기"]];
+    // 1-6. 갑구에 유효 위험이 있는 경우 (요약에서 추출)
+    if (!r.summaryCleanGapgu) {
+      const gapguBlock = summary.match(/소유지분을\s*제외한[\s\S]*?(?=3\.\s*\(근\)|$)/);
+      if (gapguBlock && !/기록사항\s*없음/.test(gapguBlock[0])) {
+        const riskDefs = [[/강제경매/, "강제경매개시결정"], [/임의경매/, "임의경매개시결정"], [/가압류/, "가압류"], [/가처분/, "가처분"], [/압류/, "압류"], [/신탁(?!.*보험|재산|귀속)/, "신탁"], [/환매/, "환매특약"], [/예고등기/, "예고등기"], [/가등기/, "가등기"]];
         for (const [pat, label] of riskDefs) {
-          if (pat.test(entryText) && !r.risks.includes(label)) r.risks.push(label);
+          if (pat.test(gapguBlock[0])) r.risks.push(label);
         }
       }
     }
   }
 
-  // ★ 을구 근저당 — 요약에서 "기록사항 없음"이면 바로 패스
-  if (!r.summaryCleanEulgu) {
-    let eulgu = "";
-    const eulguM = rawText.match(/【\s*을\s*구\s*】[\s\S]*?(?=주요\s*등기|출력일시|$)/);
-    if (!eulguM) { const eulguM2 = rawText.match(/(근\s*\)?\s*저당권\s*및[\s\S]*?)(?=\[\s*참\s*고|\[\s*주\s*의|주요\s*등기|$)/); if (eulguM2) eulgu = eulguM2[1]; }
-    else eulgu = eulguM[0];
-    
-    if (eulgu) {
-      // 순위번호별로 분리
-      const entries = [...eulgu.matchAll(/순위번호\s*(\d+)\s*([\s\S]*?)(?=순위번호\s*\d+|--\s*이\s*하|$)/g)];
-      for (const entry of entries) {
-        const entryNum = parseInt(entry[1]);
-        const entryText = entry[2];
-        // 말소된 순위번호면 스킵
-        if (cancelledNums.has(entryNum)) continue;
-        // 자체가 말소 등기면 스킵
-        if (/말소|해지|해제|취하/.test(entryText.slice(0, 60))) continue;
-        // 근저당 추출
-        const maxM = entryText.match(/채권최고액\s*금?\s*([\d,]+)\s*원/);
-        if (!maxM) continue;
-        const amt = parseInt(maxM[1].replace(/,/g, ""));
-        if (amt < 1000000) continue;
-        const mg = { holder: "", maxAmount: Math.round(amt / 10000), date: "" };
-        const hm = entryText.match(/근저당권자\s+([가-힣()]+(?:주식회사|은행|금고|보험|캐피탈|저축|신협|농협|수협|생명|화재|카드|대부|조합)[가-힣()]*)/);
-        if (hm) mg.holder = hm[1].replace(/주식회사/g, "㈜").trim();
-        else { const hm2 = entryText.match(/([\w가-힣]+(?:은행|금고|보험|캐피탈|저축|신협|농협|수협|생명|화재|카드|대부|해상|조합))/); if (hm2) mg.holder = hm2[1]; }
-        const dm = entryText.match(/(20\d{2}년\s*\d{1,2}월\s*\d{1,2}일)/);
-        if (dm) mg.date = dm[1].replace(/\s/g, "");
-        r.mortgages.push(mg);
-      }
+  // ============================================
+  // PART 2: 첫 장 — 표제부 (물건 정보)
+  // ============================================
+  const j = rawText.replace(/\s+/g, " ").trim();
+
+  // 2-1. 주소 ([집합건물]에서)
+  const addrM = j.match(/\[집합건물\]\s*((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[^【]*?제?\d+호)/);
+  if (addrM) r.address = addrM[1].replace(/\s+/g, " ").trim();
+  if (r.address.length > 120) r.address = r.address.slice(0, 120);
+
+  // 2-2. 도로명 주소
+  const doroM = rawText.match(/\[도로명주소\]\s*((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[가-힣\d\s\-.,()]+)/);
+  if (doroM) r.doroAddress = doroM[1].replace(/\s+/g, " ").trim();
+
+  // 2-3. 전용면적 (전유부분에서)
+  const jeonyu = rawText.match(/전유부분의\s*건물의\s*표시[\s\S]*?(?=대지권|갑\s*구|$)/);
+  if (jeonyu) {
+    const jyArea = jeonyu[0].match(/([\d.]+)\s*㎡/);
+    if (jyArea && parseFloat(jyArea[1]) > 10 && parseFloat(jyArea[1]) < 300) r.area = parseFloat(jyArea[1]).toFixed(2) + "㎡";
+  }
+
+  // 2-4. 총층수 (1동 건물 내역에서)
+  const buildingDesc = rawText.match(/1동의\s*건물의\s*표시[\s\S]*?전유부분/);
+  if (buildingDesc) {
+    const floorNums = [...buildingDesc[0].matchAll(/(\d{1,2})층\s+[\d.]+㎡/g)];
+    if (floorNums.length > 0) r.totalFloors = Math.max(...floorNums.map(m => parseInt(m[1]))) + "층";
+    else {
+      const flM = buildingDesc[0].match(/(\d+)\s*층\s*$/m) || buildingDesc[0].match(/(\d+)\s*층\s*(?:공동주택|업무|근린)/);
+      if (flM) r.totalFloors = flM[1] + "층";
     }
   }
+
+  // 2-5. 해당 층/호 (제N층 제NNN호)
+  const unitFloorM = j.match(/제(\d+)층\s*제\d+호/);
+  if (unitFloorM) r.unitFloor = unitFloorM[1] + "층";
+
+  // 2-6. 대지권
+  if (/대지권/.test(j)) r.landRight = "있음";
+
+  // 2-7. 건물 유형
+  if (/집합건물/.test(rawText)) r.type = "집합건물";
+  const typeM = j.match(/(아파트|오피스텔|빌라|다세대|연립|단독|다가구|상가|근린생활|사무실|공동주택)/);
+  if (typeM) r.type = typeM[1];
 
   return r;
 }
@@ -674,25 +647,35 @@ function mergeData(parsed, regParsed) {
   // 위험
   if (regParsed.risks?.length > 0) f.risks = [...new Set([...(f.risks || []), ...regParsed.risks])];
 
-  // 특이사항 보충
-  const specials = f.special ? [f.special] : [];
-  if (regParsed.owners?.length > 1) specials.push("공동소유: " + regParsed.owners.map(o => `${o.name}(${o.share})`).join(", "));
-  if (regParsed.area && !f.special?.includes(regParsed.area)) specials.push("전용 " + regParsed.area);
-  if (regParsed.totalFloors) specials.push("총 " + regParsed.totalFloors);
-  if (regParsed.unitFloor) specials.push("해당 " + regParsed.unitFloor);
+  // 특이사항 보충 (중복 제거)
+  const specials = [];
+  // 카톡 특이사항에서 등기부와 겹치는 항목 제거 후 추가
+  if (f.special) {
+    f.special.split(/\s*\/\s*/).forEach(item => {
+      const t = item.trim();
+      if (!t) return;
+      // 등기부에서 더 정확한 값이 있으면 카톡 버전 스킵
+      if (regParsed.area && /전용/.test(t)) return;
+      if (regParsed.totalFloors && /총.*층/.test(t)) return;
+      if (regParsed.unitFloor && /해당.*층/.test(t)) return;
+      if (regParsed.transferDate && /소유권이전/.test(t)) return;
+      if (regParsed.landRight && /대지권/.test(t)) return;
+      if (/층\s*중\s*\d+층/.test(t) && regParsed.totalFloors && regParsed.unitFloor) return;
+      specials.push(t);
+    });
+  }
+  if (regParsed.area) specials.push("전용 " + regParsed.area);
+  if (regParsed.totalFloors && regParsed.unitFloor) specials.push(regParsed.totalFloors + " 중 " + regParsed.unitFloor);
+  else { if (regParsed.totalFloors) specials.push("총 " + regParsed.totalFloors); if (regParsed.unitFloor) specials.push("해당 " + regParsed.unitFloor); }
   if (regParsed.landRight) specials.push("대지권: " + regParsed.landRight);
-  if (regParsed.transferDate) specials.push("소유권이전: " + regParsed.transferDate + (regParsed.transferCause ? "(" + regParsed.transferCause + ")" : ""));
-  // 등기부 깨끗하면 표시
-  if (regParsed.summaryCleanGapgu) specials.push("✅ 갑구 깨끗 (기록사항 없음)");
-  if (regParsed.summaryCleanEulgu) specials.push("✅ 을구 깨끗 (기록사항 없음)");
-  // 위험은 등기부 요약이 "깨끗"이면 무시
+  if (regParsed.transferDate) specials.push("소유권이전: " + regParsed.transferDate + (regParsed.transferCause ? "(" + regParsed.transferCause + ")" : "") + (regParsed.tradePrice ? " / 거래가 " + num(regParsed.tradePrice) + "만" : ""));
+  if (regParsed.owners?.length > 1) specials.push("공동소유: " + regParsed.owners.map(o => `${o.name}(${o.share})`).join(", "));
+  if (regParsed.summaryCleanGapgu && regParsed.summaryCleanEulgu) specials.push("✅ 등기부 깨끗");
+  else { if (regParsed.summaryCleanGapgu) specials.push("✅ 갑구 깨끗"); if (regParsed.summaryCleanEulgu) specials.push("✅ 을구 깨끗"); }
   if (!regParsed.summaryCleanGapgu && regParsed.risks?.length > 0) {
     f.risks = [...new Set([...(f.risks || []), ...regParsed.risks])];
     specials.push(regParsed.risks.map(r => "⚠️ " + r).join(", "));
-  } else {
-    // 요약이 깨끗하면 위험 초기화
-    f.risks = [];
-  }
+  } else { f.risks = []; }
   f.special = specials.join(" / ");
 
   // 순위 자동 판단
@@ -862,12 +845,31 @@ export default function Home() {
     if (!regText.trim()) { showToast("등기부 데이터가 없습니다"); return; }
     setAiParsing(true);
     try {
+      // 등기부에서 첫 장(표제부) + 마지막 장(요약)만 추출하여 AI에 전달
+      const summaryStart = regText.indexOf("주요 등기사항 요약") !== -1 ? regText.indexOf("주요 등기사항 요약") : regText.indexOf("주요등기사항");
+      const firstPage = regText.slice(0, Math.min(regText.indexOf("【 갑 구 】") || 1500, 1500));
+      const summaryPage = summaryStart > -1 ? regText.slice(summaryStart) : "";
+      const slimText = (firstPage + "\n---\n" + summaryPage).slice(0, 3000);
+
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 25000);
+      const timeout = setTimeout(() => controller.abort(), 9000);
       const res = await fetch("/api/registry", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: regText.slice(0, 4000), kb: merged.kb || "", hint: regParsed ? { owners: regParsed.owners?.map(o => `${o.name}(${o.role}, ${o.share})`).join(", ") || "", area: regParsed.area || "", totalFloors: regParsed.totalFloors || "", unitFloor: regParsed.unitFloor || "", mortgages: regParsed.mortgages?.map(m => `${m.holder}: ${m.maxAmount}만`).join(", ") || "", risks: regParsed.risks?.join(", ") || "없음" } : null }),
+        body: JSON.stringify({
+          text: slimText,
+          kb: merged.kb || "",
+          hint: regParsed ? {
+            owners: regParsed.owners?.map(o => `${o.name}(${o.role}, ${o.share})`).join(", ") || "",
+            area: regParsed.area || "", totalFloors: regParsed.totalFloors || "", unitFloor: regParsed.unitFloor || "",
+            mortgages: regParsed.mortgages?.length > 0 ? regParsed.mortgages.map(m => `${m.holder}: ${m.maxAmount}만`).join(", ") : "없음",
+            risks: regParsed.risks?.length > 0 ? regParsed.risks.join(", ") : "없음",
+            gapgu: regParsed.summaryCleanGapgu ? "기록사항 없음 (깨끗)" : "확인 필요",
+            eulgu: regParsed.summaryCleanEulgu ? "기록사항 없음 (깨끗)" : "확인 필요",
+            transferDate: regParsed.transferDate || "", transferCause: regParsed.transferCause || "",
+            tradePrice: regParsed.tradePrice ? regParsed.tradePrice + "만" : "",
+          } : null
+        }),
         signal: controller.signal,
       });
       clearTimeout(timeout);
