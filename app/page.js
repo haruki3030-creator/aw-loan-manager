@@ -425,11 +425,24 @@ function parseRegistry(rawText) {
       r.owners.forEach((o, i) => { if (shareMatches[i]) o.share = shareMatches[i][0]; });
     }
 
-    // 1-2. 순위번호 추출 → 본문에서 해당 순위번호의 이전일/원인/거래가 찾기
-    const rankMatch = summary.match(/순위번호\s*(\d+)/);
-    if (rankMatch) {
-      const ownerRank = parseInt(rankMatch[1]);
-      // PDF.js 추출 시 "12\n소유권이전\n2024년11월27일\n...\n매매" 형태 (줄바꿈 다수)
+    // 1-2. 순위번호 추출 — 요약 테이블에서 순위번호는 소유자 행 끝에 나옴
+    // "순위번호\n김미선 (소유자)\n690720-*******\n단독소유\n주소...\n12" 형태
+    let ownerRank = null;
+    // 방법1: "순위번호" 다음 블록에서 독립된 숫자 찾기
+    const rankSection = summary.match(/순위번호[\s\S]*?(?=2\.\s*소유지분을|$)/);
+    if (rankSection) {
+      // 소유자 정보 뒤에 오는 독립 숫자 (1~999)
+      const nums = [...rankSection[0].matchAll(/(?:^|\n)\s*(\d{1,3})\s*(?:\n|$)/gm)];
+      if (nums.length > 0) ownerRank = parseInt(nums[nums.length - 1][1]);
+    }
+    // 방법2: 직접 "순위번호 N" 패턴
+    if (!ownerRank) {
+      const directM = summary.match(/순위번호\s+(\d{1,3})/);
+      if (directM) ownerRank = parseInt(directM[1]);
+    }
+
+    if (ownerRank) {
+      // PDF.js 추출: "12\n소유권이전\n2024년11월27일\n...\n매매"
       const patterns = [
         new RegExp(`(?:^|\\n)${ownerRank}\\s*\\n?\\s*소유권이전[\\s\\S]{0,300}?(20\\d{2}년\\s*\\d{1,2}월\\s*\\d{1,2}일)[\\s\\S]{0,300}?(매매|상속|증여|경매|강제경매로\\s*인한\\s*매각|신탁)`, "m"),
         new RegExp(`${ownerRank}[\\s\\n]+소유권이전[\\s\\S]*?(20\\d{2}년\\s*\\d{1,2}월\\s*\\d{1,2}일)[\\s\\S]{0,300}?(매매|상속|증여|경매)`, "m"),
@@ -502,9 +515,14 @@ function parseRegistry(rawText) {
     const doroBlock = rawText.slice(doroIdx, doroIdx + 300);
     // 시/도 + ~길/로 + 번호 패턴 조합
     const cityM = doroBlock.match(/((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주|충청북도|충청남도|경상북도|경상남도|전라북도|전라남도|강원특별자치도)[가-힣\s]*(?:시|군|구))/);
-    const roadM = doroBlock.match(/([가-힣]+(?:로|길)\s*\d+[가-힣\d\-]*)/);
+    const roadM = doroBlock.match(/([가-힣\d]+(?:로|길)\s*\d+[가-힣\d\-]*)/);
     if (cityM && roadM) {
       r.doroAddress = (cityM[1] + " " + roadM[1]).replace(/\s+/g, " ").trim();
+    }
+    // 도로명만 못 찾으면 "읍/면 + 길/로 + 번호" 조합 시도
+    if (!r.doroAddress && cityM) {
+      const eupM = doroBlock.match(/([가-힣]+(?:읍|면|동))\s*\n?\s*([가-힣\d]+(?:로|길)\s*\d+)/);
+      if (eupM) r.doroAddress = cityM[1] + " " + eupM[1] + " " + eupM[2];
     }
   }
 
@@ -679,6 +697,10 @@ function mergeData(parsed, regParsed) {
       if (regParsed.transferDate && /소유권이전/.test(t)) return;
       if (regParsed.landRight && /대지권/.test(t)) return;
       if (/층\s*중\s*\d+층/.test(t) && regParsed.totalFloors && regParsed.unitFloor) return;
+      // 요청금액은 특이사항이 아님
+      if (/한도\s*요청|가능사.*확인|최대.*요청|필요.*자금/.test(t)) return;
+      // URL 제거
+      if (/https?:\/\/|kbland/.test(t)) return;
       specials.push(t);
     });
   }
