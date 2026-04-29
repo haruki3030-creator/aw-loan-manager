@@ -24,25 +24,46 @@ function parsePrice(s) {
 async function searchComplex(keyword) {
   // 단지 검색
   const url = `https://new.land.naver.com/api/search?keyword=${encodeURIComponent(keyword)}&siteOrigin=p`;
-  const res = await fetch(url, { headers: HEADERS });
-  if (!res.ok) throw new Error(`검색 실패 ${res.status}`);
-  const data = await res.json();
-  const complexes = data?.complexes || [];
-  return complexes.map((c) => ({
-    complexNo: c.complexNo,
-    name: c.complexName,
-    address: c.cortarAddress || c.exposureAddress || "",
-    type: c.realEstateTypeName || "",
-  }));
+  const controller = new AbortController();
+  const tm = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(url, { headers: HEADERS, signal: controller.signal });
+    clearTimeout(tm);
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      throw new Error(`search ${res.status}: ${txt.slice(0,200)}`);
+    }
+    const data = await res.json();
+    const complexes = data?.complexes || [];
+    return complexes.map((c) => ({
+      complexNo: c.complexNo,
+      name: c.complexName,
+      address: c.cortarAddress || c.exposureAddress || "",
+      type: c.realEstateTypeName || "",
+    }));
+  } catch (e) {
+    clearTimeout(tm);
+    throw new Error(`search fetch: ${e.name === "AbortError" ? "timeout 8s" : e.message}`);
+  }
 }
 
 async function fetchArticles(complexNo, page = 1) {
-  // 매매 매물
   const url = `https://new.land.naver.com/api/articles/complex/${complexNo}?realEstateType=APT&tradeType=A1&order=rank&page=${page}`;
-  const res = await fetch(url, { headers: HEADERS });
-  if (!res.ok) throw new Error(`매물 조회 실패 ${res.status}`);
-  const data = await res.json();
-  return data?.articleList || [];
+  const controller = new AbortController();
+  const tm = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(url, { headers: HEADERS, signal: controller.signal });
+    clearTimeout(tm);
+    if (!res.ok) {
+      const txt = await res.text().catch(() => "");
+      throw new Error(`articles ${res.status}: ${txt.slice(0,200)}`);
+    }
+    const data = await res.json();
+    return data?.articleList || [];
+  } catch (e) {
+    clearTimeout(tm);
+    throw new Error(`articles fetch: ${e.name === "AbortError" ? "timeout 8s" : e.message}`);
+  }
 }
 
 export async function POST(req) {
