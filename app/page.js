@@ -1184,12 +1184,27 @@ export default function Home() {
 
           <div style={{ ...s.section, marginTop: 24 }}>◆ 등기부등본 (선택)</div><div style={s.divider} />
           <input ref={fileRef} type="file" accept=".pdf" onChange={handlePdf} style={{ display: "none" }} />
-          <div style={{ ...s.uploadBox, borderColor: regFile ? "#7fdb7f" : border }} onClick={() => fileRef.current?.click()}>
-            {loading ? <span style={{ color: goldLight }}>⟳ PDF 분석 중...</span>
-              : regFile ? <div><div style={{ color: "#7fdb7f", fontWeight: 700 }}>✓ {regFile}</div><div style={{ color: textMuted, fontSize: 12, marginTop: 4 }}>{regParsed ? `근저당 ${regParsed.mortgages.length}건 / 위험 ${regParsed.risks.length}건` : ""}</div></div>
-              : <div><div style={{ fontSize: 28, marginBottom: 6 }}>📄</div><div style={{ color: goldLight, fontWeight: 600 }}>등기부 PDF 업로드</div></div>}
+          <div style={{ position: "relative" }}>
+            <div style={{ ...s.uploadBox, borderColor: regFile ? "#7fdb7f" : border }} onClick={() => { if (!regFile) fileRef.current?.click(); }}>
+              {loading ? <span style={{ color: goldLight }}>⟳ PDF 분석 중...</span>
+                : regFile ? <div><div style={{ color: "#7fdb7f", fontWeight: 700 }}>✓ {regFile}</div><div style={{ color: textMuted, fontSize: 12, marginTop: 4 }}>{regParsed ? `근저당 ${regParsed.mortgages.length}건 / 위험 ${regParsed.risks.length}건` : ""}</div></div>
+                : <div><div style={{ fontSize: 28, marginBottom: 6 }}>📄</div><div style={{ color: goldLight, fontWeight: 600 }}>등기부 PDF 업로드</div></div>}
+            </div>
+            {regFile && !loading && (
+              <button
+                onClick={(e) => { e.stopPropagation(); setRegFile(null); setRegText(""); setRegParsed(null); if (fileRef.current) fileRef.current.value = ""; showToast("등기부 제거됨"); }}
+                style={{ position: "absolute", top: 8, right: 8, width: 26, height: 26, borderRadius: "50%", background: "rgba(255,80,80,0.15)", border: "1px solid rgba(255,80,80,0.4)", color: "#ff7b7b", fontSize: 14, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, lineHeight: 1 }}
+                title="등기부 제거"
+              >×</button>
+            )}
           </div>
           {!regFile && <><div style={{ textAlign: "center", padding: "10px 0", fontSize: 11, color: textMuted }}>— 또는 텍스트 직접 붙여넣기 —</div><textarea style={{ ...s.textarea, minHeight: 80 }} placeholder="등기부등본 텍스트..." value={regText} onChange={(e) => setRegText(e.target.value)} /></>}
+          {regText.trim() && !regFile && (
+            <button
+              onClick={() => { setRegText(""); setRegParsed(null); showToast("등기부 텍스트 비움"); }}
+              style={{ marginTop: 6, padding: "4px 10px", background: "rgba(255,80,80,0.1)", border: "1px solid rgba(255,80,80,0.3)", borderRadius: 6, color: "#ff7b7b", fontSize: 11, cursor: "pointer" }}
+            >× 등기부 텍스트 지우기</button>
+          )}
 
           {aiParsing && <div style={{ textAlign: "center", padding: "16px 0", color: goldLight, fontSize: 14, fontWeight: 600 }}><span style={{ display: "inline-block", animation: "spin 1s linear infinite", marginRight: 8 }}>⟳</span>AI 분석 중...<style>{`@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}`}</style></div>}
           <button style={{ ...s.btnPrimary, marginTop: 20, opacity: (kakaoText.trim() || regText.trim() || regFile) && !aiParsing ? 1 : 0.4, pointerEvents: (kakaoText.trim() || regText.trim() || regFile) && !aiParsing ? "auto" : "none" }} onClick={handleAIParse}>🤖 AI 종합 분석</button>
@@ -1556,30 +1571,92 @@ function BulkTab({ bulkText, setBulkText, bulkResults, setBulkResults, bulkLoadi
   function splitBulkMessages(raw) {
     var blocks = [], current = "";
     var lines = raw.split("\n");
+    var emptyCount = 0;
+
+    // 분리 패턴 (각각 새 블록 시작)
+    // 1. [모든] [날짜] 헤더
+    // 2. [이름] [오후 H:MM] 카톡 export (PC)
+    // 3. "2025.4.29 오후 3:24, 이름 :" 카톡 export (Mac)
+    // 4. "===" 또는 "---" 구분선
+    var headerPatterns = [
+      /^\[모든\]/,
+      /^\[[가-힣A-Za-z0-9\s_·]+\]\s*\[\s*(?:오전|오후)?\s*\d{1,2}:\d{2}\s*\]/,
+      /^\d{4}[.년]\s*\d{1,2}[.월]\s*\d{1,2}[.일]?\s*(?:오전|오후)?\s*\d{1,2}:\d{2}\s*[,，]?\s*[가-힣A-Za-z]+\s*:/,
+      /^[=]{3,}\s*$/,
+      /^[-]{3,}\s*$/,
+    ];
+    function isHeaderLine(s) {
+      for (var i = 0; i < headerPatterns.length; i++) if (headerPatterns[i].test(s)) return true;
+      return false;
+    }
+    function stripHeader(s) {
+      return s
+        .replace(/^\[모든\]\s*\[[\s\S]*?\]\s*/, "")
+        .replace(/^\[[가-힣A-Za-z0-9\s_·]+\]\s*\[\s*(?:오전|오후)?\s*\d{1,2}:\d{2}\s*\]\s*/, "")
+        .replace(/^\d{4}[.년]\s*\d{1,2}[.월]\s*\d{1,2}[.일]?\s*(?:오전|오후)?\s*\d{1,2}:\d{2}\s*[,，]?\s*[가-힣A-Za-z]+\s*:\s*/, "")
+        .replace(/^[=\-]{3,}\s*/, "")
+        .trim();
+    }
+
     for (var li = 0; li < lines.length; li++) {
       var trimmed = lines[li].trim();
-      if (!trimmed) continue;
-      if (/^\[모든\]/.test(trimmed)) {
+      if (!trimmed) {
+        emptyCount++;
+        if (emptyCount >= 2 && current.trim()) { blocks.push(current.trim()); current = ""; }
+        continue;
+      }
+      emptyCount = 0;
+      if (isHeaderLine(trimmed)) {
         if (current.trim()) blocks.push(current.trim());
-        current = trimmed.replace(/^\[모든\]\s*\[[\s\S]*?\]\s*/, "").trim();
-      } else { current += "\n" + trimmed; }
+        current = stripHeader(trimmed);
+      } else {
+        current += (current ? "\n" : "") + trimmed;
+      }
     }
     if (current.trim()) blocks.push(current.trim());
-    if (blocks.length === 0) blocks.push(raw.trim());
+
     var SIDO = /서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주|충청|전라|경상/;
+
+    // 폴백: 분리 안 됐는데 한 덩이가 명백히 여러 건이면 SIDO+주민번호 패턴으로 재분리
+    if (blocks.length <= 1 && raw.trim()) {
+      var allText = raw.trim();
+      // 주민번호 패턴(YYMMDD-N)이 2개 이상이면 그 위치로 분리
+      var pivots = [];
+      var rrnRe = /(?:[가-힣]{2,4}\s*[\/\s·]\s*)?\d{6}\s*[-]\s*[1-49]/g;
+      var m;
+      while ((m = rrnRe.exec(allText)) !== null) {
+        // 사람 이름이 직전에 오는 위치 찾기 (이전 줄의 시작)
+        var start = allText.lastIndexOf("\n", m.index);
+        pivots.push(start === -1 ? 0 : start + 1);
+      }
+      if (pivots.length >= 2) {
+        blocks = [];
+        for (var pi = 0; pi < pivots.length; pi++) {
+          var seg = allText.slice(pivots[pi], pivots[pi + 1] || allText.length).trim();
+          if (seg) blocks.push(seg);
+        }
+      } else {
+        blocks = [allText];
+      }
+    }
+
     var deals = [], pendingMemo = "";
     for (var bi = 0; bi < blocks.length; bi++) {
       var block = blocks[bi];
       if (/^파일:/.test(block)) continue;
+      if (/^(사진|이모티콘|동영상|음성메시지)$/.test(block)) continue;
       if (/^★/.test(block)) { pendingMemo = block; continue; }
       var isDeal = /\[(?:아파트|빌라|연립|다세대|빌라연립다세대|오피스텔|주상복합|단독|다가구|도생|도시형|재건축)/.test(block)
         || (SIDO.test(block) && /시세|kb|KB|기대출|선순위|순위|근저당|대출|한도|대환/i.test(block))
-        || (/[가-힣]{2,4}\s*[\/\s]\s*\d{6}/.test(block) && SIDO.test(block));
+        || (/[가-힣]{2,4}\s*[\/\s]\s*\d{6}/.test(block) && SIDO.test(block))
+        || (/\d{6}\s*[-]\s*[1-49]/.test(block) && /\d/.test(block));
       if (isDeal) {
         deals.push(pendingMemo ? pendingMemo + "\n" + block : block);
         pendingMemo = "";
       } else { pendingMemo = block; }
     }
+    // 분류된 deal 0건이면 전체를 1건으로 처리 (기존 동작 보존)
+    if (deals.length === 0 && blocks.length > 0) deals.push(blocks.join("\n").trim());
     return deals;
   }
 
@@ -1607,6 +1684,20 @@ function BulkTab({ bulkText, setBulkText, bulkResults, setBulkResults, bulkLoadi
     showToast(deals.length + "건 분류 완료!");
   }
 
+  function matchType(rawType, filterTypes) {
+    if (!rawType) return { ok: false, reason: "유형 불명" };
+    var t = String(rawType).trim();
+    // 정확 일치
+    if (filterTypes[t]) return { ok: true };
+    // 변형 매칭
+    if (/빌라|다세대|연립/.test(t) && filterTypes["빌라/다세대"]) return { ok: true };
+    if (/주상복합/.test(t) && filterTypes["주상복합"]) return { ok: true };
+    if (/오피스텔/.test(t) && filterTypes["오피스텔"]) return { ok: true };
+    if (/아파트/.test(t) && filterTypes["아파트"]) return { ok: true };
+    // 단독/다가구/상가/토지 등 — filter에 없으면 fail
+    return { ok: false, reason: "유형: " + t };
+  }
+
   function classifyBulk(results, filters) {
     var pass = [], review = [], fail = [];
     for (var ri = 0; ri < results.length; ri++) {
@@ -1614,19 +1705,28 @@ function BulkTab({ bulkText, setBulkText, bulkResults, setBulkResults, bulkLoadi
       if (!item.data) { review.push({ data: {}, raw: item.raw, reasons: ["파싱 실패"] }); continue; }
       var d = item.data;
       var reasons = [], warnings = [];
-      var typeKey = d.type === "빌라" ? "빌라/다세대" : d.type;
-      if (!filters.types[typeKey] && !filters.types[d.type]) reasons.push("유형: " + d.type);
-      var rankNum = parseInt(d.rank) || 99;
-      if (rankNum > filters.maxRank) reasons.push(d.rank + " (" + filters.maxRank + "순위까지)");
-      if (d.region && !filters.regions[d.region]) reasons.push("지역: " + d.region);
+
+      var tm = matchType(d.type, filters.types);
+      if (!tm.ok) reasons.push(tm.reason);
+
+      var rankNum = parseInt(String(d.rank || "")) || 99;
+      if (d.rank === "불명") warnings.push("순위 불명");
+      else if (rankNum > filters.maxRank) reasons.push(d.rank + " (" + filters.maxRank + "순위까지)");
+
+      // region이 비어있거나 "기타"면 경고만 (fail 아님)
+      if (d.region && d.region !== "기타" && !filters.regions[d.region]) reasons.push("지역: " + d.region);
+      else if (!d.region) warnings.push("지역 불명");
+
       var kb = d.kbAppliedValue || d.kbMid || d.kbLow || d.housemuch || 0;
       if (kb > 0 && kb < filters.minKb) reasons.push("시세 " + num(kb) + "만 < " + num(filters.minKb) + "만");
-      if (filters.riskExclude && (d.risks || []).length > 0) reasons.push("위험: " + d.risks.join(","));
       if (kb === 0) warnings.push("시세 없음");
+
+      if (filters.riskExclude && (d.risks || []).length > 0) reasons.push("위험: " + d.risks.join(","));
+
       if (!d.name) warnings.push("이름 없음");
       if (!d.address) warnings.push("주소 없음");
-      if (d.rank === "불명") warnings.push("순위 불명");
       ["매입자금","소득증빙불가","증여","지층","지분대출","공동소유","신탁"].forEach(function(f) { if ((d.flags||[]).indexOf(f) >= 0) warnings.push(f); });
+
       if (reasons.length > 0) fail.push({ data: d, raw: item.raw, reasons: reasons.concat(warnings) });
       else if (warnings.length > 0) review.push({ data: d, raw: item.raw, reasons: warnings });
       else pass.push({ data: d, raw: item.raw, reasons: [] });
