@@ -601,7 +601,7 @@ function aiToInternal(ai) {
 
   d.amount = ai.amount || "";
   d.purpose = ai.purpose || "";
-  d.special = ai.special || "";
+  d.special = (ai.special || "").split(/\s*[\/,]\s*/).filter(s => !/https?:\/\/|kbland|한도\s*요청|가능사.*확인/.test(s)).join(" / ");
   d.note = ai.note || "";
 
   // 등기부 (AI가 함께 분석한 경우)
