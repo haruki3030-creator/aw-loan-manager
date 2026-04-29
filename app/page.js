@@ -240,7 +240,7 @@ function parseKakao(raw) {
 // 등기부 파서 (정규식)
 // ========================
 function parseRegistry(rawText) {
-  const r = { address: "", type: "", area: "", landRight: "", owners: [], owner: "", ownerBirth: "", ownership: "단독소유", transferDate: "", transferCause: "", mortgages: [], totalMax: 0, totalEst: 0, risks: [] };
+  const r = { address: "", type: "", area: "", areaSupply: "", totalFloors: "", unitFloor: "", landRight: "", owners: [], owner: "", ownerBirth: "", ownership: "단독소유", transferDate: "", transferCause: "", mortgages: [], totalMax: 0, totalEst: 0, risks: [] };
   let text = rawText.replace(/\[\s*주\s*의\s*사\s*항\s*\][\s\S]*?(?=고유번호|\d+\.\s|$)/g, " ").replace(/\[\s*참\s*고\s*사\s*항\s*\][\s\S]*?(?=\d+\.\s|$)/g, " ").replace(/본\s*주요\s*등기사항[\s\S]*?바랍니다\.?/g, " ").replace(/가\.\s*등기기록에서[\s\S]*?표시합니다\./g, " ").replace(/나\.\s*최종지분은[\s\S]*?하였습니다\./g, " ").replace(/다\.\s*지분이[\s\S]*?것입니다\./g, " ").replace(/라\.\s*대상소유자[\s\S]*?있습니다\./g, " ").replace(/정확한\s*권리사항은[\s\S]*?(?=\n|$)/g, " ");
   const j = text.replace(/\s+/g, " ").trim();
 
@@ -252,7 +252,42 @@ function parseRegistry(rawText) {
 
   if (/집합건물/.test(rawText)) r.type = "집합건물";
   const tm = j.match(/(아파트|오피스텔|빌라|다세대|연립|단독|다가구|상가|근린생활|사무실)/); if (tm) r.type = tm[1];
-  const arm = j.match(/(?:전용면적|전용|면적)\s*([\d.]+)\s*㎡/); if (arm && parseFloat(arm[1]) > 10 && parseFloat(arm[1]) < 300) r.area = arm[1] + "㎡";
+
+  // 전용면적 — 전유부분 건물 표시에서 추출
+  const jeonyu = rawText.match(/전유부분의\s*건물의\s*표시[\s\S]*?(?=대지권|갑\s*구|$)/);
+  if (jeonyu) {
+    const jyArea = jeonyu[0].match(/([\d.]+)\s*㎡/);
+    if (jyArea && parseFloat(jyArea[1]) > 10 && parseFloat(jyArea[1]) < 300) r.area = jyArea[1] + "㎡";
+  }
+  if (!r.area) {
+    const arm = j.match(/(?:전용면적|전용|면적)\s*([\d.]+)\s*㎡/);
+    if (arm && parseFloat(arm[1]) > 10 && parseFloat(arm[1]) < 300) r.area = arm[1] + "㎡";
+  }
+
+  // 공급면적(1동 건물 내역에서 해당 층 면적)
+  // "제N층 NNNN.NNNN㎡" 패턴에서 전체 건물 면적 → 공급면적 아님, 스킵
+
+  // 총 층수 — "N층" 패턴 중 가장 큰 숫자 또는 "지상 N층"
+  const floorM = rawText.match(/지상\s*(\d+)\s*층/);
+  if (floorM) r.totalFloors = floorM[1] + "층";
+  else {
+    // 1동 건물 내역에서 "10층 NNNN㎡" 같은 패턴으로 최고층 추출
+    const floorNums = [...rawText.matchAll(/^[\s]*(\d{1,3})층\s+[\d.]+㎡/gm)];
+    if (floorNums.length > 0) {
+      const maxFloor = Math.max(...floorNums.map(m => parseInt(m[1])));
+      r.totalFloors = maxFloor + "층";
+    }
+  }
+  // 옥탑은 제외
+  if (!r.totalFloors) {
+    const buildingDesc = j.match(/(\d+)층\s*(?:업무|근린|오피스|아파트|주거)/);
+    if (buildingDesc) r.totalFloors = buildingDesc[1] + "층";
+  }
+
+  // 해당 호실 층수 — "제N층 제NNN호" 에서 추출
+  const unitFloorM = j.match(/제(\d+)층\s*제\d+호/);
+  if (unitFloorM) r.unitFloor = unitFloorM[1] + "층";
+
   if (/대지권/.test(j)) r.landRight = "있음";
 
   // 소유자 — 소유지분현황에서만
@@ -366,6 +401,8 @@ function mergeData(kakao, reg) {
   if (reg) {
     if (reg.owners.length > 1) specials.push("공동소유: " + reg.owners.map(o => `${o.name}(${o.share})`).join(", "));
     if (reg.area) specials.push("전용 " + reg.area);
+    if (reg.totalFloors) specials.push("총 " + reg.totalFloors);
+    if (reg.unitFloor) specials.push("해당 " + reg.unitFloor);
     if (reg.landRight) specials.push("대지권: " + reg.landRight);
     if (reg.transferDate) specials.push("소유권이전: " + reg.transferDate + (reg.transferCause ? "(" + reg.transferCause + ")" : ""));
     if (reg.risks.length > 0) specials.push(reg.risks.join(", "));
@@ -501,6 +538,9 @@ export default function Home() {
       const hint = regParsed ? {
         owners: regParsed.owners?.map(o => `${o.name}(${o.role}, ${o.share})`).join(", ") || "",
         ownership: regParsed.ownership || "",
+        area: regParsed.area || "",
+        totalFloors: regParsed.totalFloors || "",
+        unitFloor: regParsed.unitFloor || "",
         mortgages: regParsed.mortgages?.map(m => `${m.holder}: 채권최고액 ${fmtW(m.maxAmount)}${m.date ? " (" + m.date + ")" : ""}`).join(", ") || "",
         totalMax: regParsed.totalMax ? fmtW(regParsed.totalMax) : "",
         risks: regParsed.risks?.join(", ") || "없음",
