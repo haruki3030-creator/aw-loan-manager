@@ -581,6 +581,10 @@ export default function Home() {
         if (/\d{3,4}$/.test(m.credit)) m.credit = m.credit + "점";
         else if (/\d{1,2}$/.test(m.credit)) m.credit = m.credit + "등급";
       }
+      // 시세가 숫자만이면 KB + 만 붙이기
+      if (m.kb && /^\d[\d,.]*$/.test(m.kb.trim())) {
+        m.kb = "KB " + m.kb.trim().replace(/,/g, "") + "만";
+      }
 
       // 3단계: 잘못된 값 정리
       // 연락처가 전화번호가 아닌 경우 제거 ("-1" 같은 오탐)
@@ -602,15 +606,31 @@ export default function Home() {
       }
 
       setKakaoParsed(m);
-      // 5단계: 특이사항 정리 — 기대출/요청이 이미 다른 필드에 있으면 특이사항에서 제거
+      // 5단계: 특이사항 정리 — 다른 필드와 중복되는 내용 제거
       if (m.special) {
-        const cleanItems = m.special.split(/\s*\/\s*/).filter(item => {
-          if (!item.trim()) return false;
-          // 기대출 줄 제거 (금융사명 + 숫자)
-          if (/^(신한|국민|우리|하나|기업|농협|현대|삼성|새마을|신협|미래|OK|캐피탈|해상)[\s가-힣]*[-:]\s*[\d,.]+/.test(item)) return false;
-          // "추가 한도 부탁" 이미 요청에 있으면 제거
-          if (/추가.*한도|추가.*부탁/.test(item) && m.amount) return false;
-          return true;
+        const cleanItems = [];
+        m.special.split(/\s*\/\s*/).forEach(item => {
+          const t = item.trim();
+          if (!t) return;
+          // 기대출 줄 제거 (금융사명 + 숫자), 괄호 안 메모는 보존
+          if (/^(신한|국민|우리|하나|기업|농협|현대|삼성|새마을|신협|미래|OK|캐피탈|해상)[\s가-힣]*[-:]\s*[\d,.]+/.test(t)) {
+            const noteInParen = t.match(/\(([^)]+)\)/);
+            if (noteInParen) cleanItems.push(noteInParen[1]);
+            return;
+          }
+          // 기대출 숫자 잔여 ("29500 (사촌..." 같은 것) — 괄호 메모 보존
+          if (/^\d[\d,.]*\s*\(/.test(t)) {
+            const noteInParen = t.match(/\(([^)]+)\)/);
+            if (noteInParen) cleanItems.push(noteInParen[1]);
+            return;
+          }
+          // 요청에 이미 들어간 내용 제거
+          if (m.amount) {
+            const amtClean = m.amount.replace(/만|억/g, "").trim();
+            if (t === m.amount || t === amtClean) return;
+            if (/가능사|확인.*부탁|부탁.*드리겠|추가.*한도|추가.*부탁/.test(t) && /가능사|확인|부탁|추가|한도/.test(m.amount)) return;
+          }
+          cleanItems.push(t);
         });
         m.special = cleanItems.join(" / ");
       }
