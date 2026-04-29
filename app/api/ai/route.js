@@ -97,8 +97,8 @@ ${registryText ? `
 카톡:
 ${text.slice(0, 2500)}${registryText ? `\n\n등기부등본:\n${registryText.slice(0, 4000)}` : ""}`;
 
-    // Vercel Hobby 10초 제한 → flash만 사용
-    const models = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
+    // flash-lite 먼저 (빠름) → flash 폴백
+    const models = ["gemini-2.5-flash-lite", "gemini-2.5-flash"];
     let lastErr = "";
 
     for (const model of models) {
@@ -113,7 +113,7 @@ ${text.slice(0, 2500)}${registryText ? `\n\n등기부등본:\n${registryText.sli
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               contents: [{ parts: [{ text: prompt }] }],
-              generationConfig: { temperature: 0, maxOutputTokens: 2000 },
+              generationConfig: { temperature: 0, maxOutputTokens: 2000, thinkingConfig: { thinkingBudget: 0 } },
             }),
             signal: controller.signal,
           }

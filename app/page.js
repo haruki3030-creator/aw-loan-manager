@@ -792,6 +792,13 @@ export default function Home() {
   const [analysis, setAnalysis] = useState("");
   const [aiModel, setAiModel] = useState("");
   const fileRef = useRef(null);
+  const [bulkText, setBulkText] = useState("");
+  const [bulkResults, setBulkResults] = useState(null);
+  const [bulkLoading, setBulkLoading] = useState(false);
+  const [bulkProgress, setBulkProgress] = useState({ done: 0, total: 0 });
+  const [bulkFilters, setBulkFilters] = useState({ types: { "아파트": true, "빌라/다세대": true, "오피스텔": false, "주상복합": true }, maxRank: 2, minKb: 5000, riskExclude: true, regions: { "수도권": true, "충청": true, "대구경북": true, "부산경남울산": true, "호남": true, "강원": true, "제주": true, "기타": false } });
+  const [bulkExpanded, setBulkExpanded] = useState({ pass: true, review: true, fail: false });
+  const [bulkDetailOpen, setBulkDetailOpen] = useState({});
 
   function showToast(msg) { setToast(msg); setTimeout(() => setToast(""), 2500); }
 
@@ -1015,6 +1022,7 @@ export default function Home() {
           <button style={s.tab(mode === "review")} onClick={() => setMode("review")}>검토수정</button>
           <button style={s.tab(mode === "analysis")} onClick={() => setMode("analysis")}>📊 분석</button>
           <button style={s.tab(mode === "output")} onClick={() => setMode("output")}>발송양식</button>
+          <button style={{...s.tab(mode === "bulk"), background: mode === "bulk" ? gold : "transparent"}} onClick={() => setMode("bulk")}>⚡대량</button>
         </div>
       </div>
 
@@ -1269,7 +1277,240 @@ export default function Home() {
           <button style={s.btnSecondary} onClick={() => setMode("review")}>수정하기</button>
           <button style={{ ...s.btnSecondary, color: textMuted }} onClick={handleReset}>새 물건 접수</button>
         </>)}
+
+        {/* === 대량접수 === */}
+        {mode === "bulk" && (<BulkTab
+          bulkText={bulkText} setBulkText={setBulkText}
+          bulkResults={bulkResults} setBulkResults={setBulkResults}
+          bulkLoading={bulkLoading} setBulkLoading={setBulkLoading}
+          bulkProgress={bulkProgress} setBulkProgress={setBulkProgress}
+          bulkFilters={bulkFilters} setBulkFilters={setBulkFilters}
+          bulkExpanded={bulkExpanded} setBulkExpanded={setBulkExpanded}
+          bulkDetailOpen={bulkDetailOpen} setBulkDetailOpen={setBulkDetailOpen}
+          setKakaoText={setKakaoText} setMode={setMode} showToast={showToast}
+          s={s} gold={gold} textMuted={textMuted} navyMid={navyMid}
+        />)}
       </div>
     </div>
   );
+}
+
+// ========================
+// 대량접수 컴포넌트 (독립)
+// ========================
+function BulkTab({ bulkText, setBulkText, bulkResults, setBulkResults, bulkLoading, setBulkLoading, bulkProgress, setBulkProgress, bulkFilters, setBulkFilters, bulkExpanded, setBulkExpanded, bulkDetailOpen, setBulkDetailOpen, setKakaoText, setMode, showToast, s, gold, textMuted, navyMid }) {
+  const accent = "#60a5fa";
+
+  function splitBulkMessages(raw) {
+    var blocks = [], current = "";
+    var lines = raw.split("\n");
+    for (var li = 0; li < lines.length; li++) {
+      var trimmed = lines[li].trim();
+      if (!trimmed) continue;
+      if (/^\[모든\]/.test(trimmed)) {
+        if (current.trim()) blocks.push(current.trim());
+        current = trimmed.replace(/^\[모든\]\s*\[[\s\S]*?\]\s*/, "").trim();
+      } else { current += "\n" + trimmed; }
+    }
+    if (current.trim()) blocks.push(current.trim());
+    if (blocks.length === 0) blocks.push(raw.trim());
+    var SIDO = /서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주|충청|전라|경상/;
+    var deals = [], pendingMemo = "";
+    for (var bi = 0; bi < blocks.length; bi++) {
+      var block = blocks[bi];
+      if (/^파일:/.test(block)) continue;
+      if (/^★/.test(block)) { pendingMemo = block; continue; }
+      var isDeal = /\[(?:아파트|빌라|연립|다세대|빌라연립다세대|오피스텔|주상복합|단독|다가구|도생|도시형|재건축)/.test(block)
+        || (SIDO.test(block) && /시세|kb|KB|기대출|선순위|순위|근저당|대출|한도|대환/i.test(block))
+        || (/[가-힣]{2,4}\s*[\/\s]\s*\d{6}/.test(block) && SIDO.test(block));
+      if (isDeal) {
+        deals.push(pendingMemo ? pendingMemo + "\n" + block : block);
+        pendingMemo = "";
+      } else { pendingMemo = block; }
+    }
+    return deals;
+  }
+
+  async function handleBulkRun() {
+    var deals = splitBulkMessages(bulkText);
+    if (deals.length === 0) { showToast("분류할 물건이 없습니다"); return; }
+    setBulkLoading(true);
+    setBulkProgress({ done: 0, total: deals.length });
+    setBulkResults(null);
+    var results = [];
+    for (var i = 0; i < deals.length; i += 3) {
+      var batch = deals.slice(i, i + 3);
+      var batchResults = await Promise.all(batch.map(function(raw) {
+        return fetch("/api/bulk", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: raw }) })
+          .then(function(res) { return res.json(); })
+          .then(function(data) { return data.result ? { data: data.result, raw: raw, error: null } : { data: null, raw: raw, error: data.error || "파싱실패" }; })
+          .catch(function(err) { return { data: null, raw: raw, error: err.message }; });
+      }));
+      results = results.concat(batchResults);
+      setBulkProgress({ done: Math.min(i + 3, deals.length), total: deals.length });
+    }
+    setBulkResults(results);
+    setBulkLoading(false);
+    setBulkDetailOpen({});
+    showToast(deals.length + "건 분류 완료!");
+  }
+
+  function classifyBulk(results, filters) {
+    var pass = [], review = [], fail = [];
+    for (var ri = 0; ri < results.length; ri++) {
+      var item = results[ri];
+      if (!item.data) { review.push({ data: {}, raw: item.raw, reasons: ["파싱 실패"] }); continue; }
+      var d = item.data;
+      var reasons = [], warnings = [];
+      var typeKey = d.type === "빌라" ? "빌라/다세대" : d.type;
+      if (!filters.types[typeKey] && !filters.types[d.type]) reasons.push("유형: " + d.type);
+      var rankNum = parseInt(d.rank) || 99;
+      if (rankNum > filters.maxRank) reasons.push(d.rank + " (" + filters.maxRank + "순위까지)");
+      if (d.region && !filters.regions[d.region]) reasons.push("지역: " + d.region);
+      var kb = d.kbAppliedValue || d.kbMid || d.kbLow || d.housemuch || 0;
+      if (kb > 0 && kb < filters.minKb) reasons.push("시세 " + num(kb) + "만 < " + num(filters.minKb) + "만");
+      if (filters.riskExclude && (d.risks || []).length > 0) reasons.push("위험: " + d.risks.join(","));
+      if (kb === 0) warnings.push("시세 없음");
+      if (!d.name) warnings.push("이름 없음");
+      if (!d.address) warnings.push("주소 없음");
+      if (d.rank === "불명") warnings.push("순위 불명");
+      ["매입자금","소득증빙불가","증여","지층","지분대출","공동소유","신탁"].forEach(function(f) { if ((d.flags||[]).indexOf(f) >= 0) warnings.push(f); });
+      if (reasons.length > 0) fail.push({ data: d, raw: item.raw, reasons: reasons.concat(warnings) });
+      else if (warnings.length > 0) review.push({ data: d, raw: item.raw, reasons: warnings });
+      else pass.push({ data: d, raw: item.raw, reasons: [] });
+    }
+    return { pass: pass, review: review, fail: fail };
+  }
+
+  var grouped = bulkResults ? classifyBulk(bulkResults, bulkFilters) : null;
+
+  return (<>
+    <div style={s.section}>◆ 대량 접수 자동 필터링 <span style={{ fontSize: 10, background: "rgba(245,158,11,0.15)", color: "#f59e0b", padding: "2px 6px", borderRadius: 4, marginLeft: 6 }}>BETA</span></div>
+    <div style={s.divider} />
+    <p style={{ fontSize: 12, color: textMuted, marginBottom: 10, lineHeight: 1.5 }}>카톡방 메시지를 통째로 붙여넣으면 건별 분리 → AI 파싱 → 필터 자동 분류합니다.</p>
+
+    <details style={{ marginBottom: 10, background: navyMid, border: "1px solid rgba(212,168,67,0.2)", borderRadius: 8, padding: "8px 12px" }}>
+      <summary style={{ cursor: "pointer", fontSize: 12, color: textMuted, fontWeight: 600 }}>
+        ⚙️ 필터: {Object.entries(bulkFilters.types).filter(function(e){return e[1]}).map(function(e){return e[0]}).join("·")} / {bulkFilters.maxRank}순위↓ / {bulkFilters.minKb.toLocaleString()}만↑
+      </summary>
+      <div style={{ marginTop: 10 }}>
+        <div style={{ fontSize: 11, color: textMuted, marginBottom: 4 }}>물건유형</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
+          {Object.keys(bulkFilters.types).map(function(k) { return (
+            <button key={k} onClick={function(){setBulkFilters(function(f){return{...f,types:{...f.types,[k]:!f.types[k]}}})}}
+              style={{ padding: "3px 10px", borderRadius: 4, fontSize: 11, cursor: "pointer", border: "none", background: bulkFilters.types[k] ? accent+"22" : navyMid, color: bulkFilters.types[k] ? accent : textMuted }}>
+              {bulkFilters.types[k] ? "☑" : "☐"} {k}
+            </button>);
+          })}
+        </div>
+        <div style={{ fontSize: 11, color: textMuted, marginBottom: 4 }}>최대순위</div>
+        <div style={{ display: "flex", gap: 4, marginBottom: 8 }}>
+          {[1,2,3,4,5].map(function(n) { return (
+            <button key={n} onClick={function(){setBulkFilters(function(f){return{...f,maxRank:n}})}}
+              style={{ padding: "3px 12px", borderRadius: 4, fontSize: 11, cursor: "pointer", border: "none", background: bulkFilters.maxRank===n ? accent+"22" : navyMid, color: bulkFilters.maxRank===n ? accent : textMuted, fontWeight: bulkFilters.maxRank===n ? 700 : 400 }}>
+              {n}순위
+            </button>);
+          })}
+        </div>
+        <div style={{ fontSize: 11, color: textMuted, marginBottom: 4 }}>지역</div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 8 }}>
+          {Object.keys(bulkFilters.regions).map(function(k) { return (
+            <button key={k} onClick={function(){setBulkFilters(function(f){return{...f,regions:{...f.regions,[k]:!f.regions[k]}}})}}
+              style={{ padding: "3px 10px", borderRadius: 4, fontSize: 11, cursor: "pointer", border: "none", background: bulkFilters.regions[k] ? accent+"22" : navyMid, color: bulkFilters.regions[k] ? accent : textMuted }}>
+              {bulkFilters.regions[k] ? "☑" : "☐"} {k}
+            </button>);
+          })}
+        </div>
+        <div style={{ fontSize: 11, color: textMuted, marginBottom: 4 }}>최소 KB시세: {bulkFilters.minKb.toLocaleString()}만</div>
+        <input type="range" min={0} max={30000} step={1000} value={bulkFilters.minKb} onChange={function(e){setBulkFilters(function(f){return{...f,minKb:parseInt(e.target.value)}})}} style={{ width: "100%", accentColor: accent }} />
+        <div style={{ display: "flex", marginTop: 4 }}>
+          <button onClick={function(){setBulkFilters(function(f){return{...f,riskExclude:!f.riskExclude}})}}
+            style={{ padding: "3px 10px", borderRadius: 4, fontSize: 11, cursor: "pointer", border: "none", background: bulkFilters.riskExclude ? "#7f1d1d" : navyMid, color: bulkFilters.riskExclude ? "#fca5a5" : textMuted }}>
+            {bulkFilters.riskExclude ? "🛑 압류/경매 자동제외 ON" : "⭕ 위험제외 OFF"}
+          </button>
+        </div>
+      </div>
+    </details>
+
+    <textarea value={bulkText} onChange={function(e){setBulkText(e.target.value);setBulkResults(null)}}
+      placeholder="카톡방 메시지를 통째로 붙여넣으세요... (어떤 형식이든 AI가 분석합니다)"
+      style={{ ...s.textarea, height: 160 }} />
+    <button onClick={handleBulkRun} disabled={!bulkText.trim() || bulkLoading}
+      style={{ ...s.btnPrimary, marginTop: 8, opacity: bulkText.trim() && !bulkLoading ? 1 : 0.5 }}>
+      {bulkLoading ? "⏳ 분석 중... " + bulkProgress.done + "/" + bulkProgress.total : "🔍 대량 분류 시작"}
+    </button>
+
+    {grouped && (<div style={{ marginTop: 14 }}>
+      <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
+        {[["pass","✅ 통과","#166534","#22c55e"],["review","⚠️ 검토","#713f12","#eab308"],["fail","❌ 제외","#7f1d1d","#ef4444"]].map(function(arr) {
+          var k=arr[0],label=arr[1],bg=arr[2],clr=arr[3];
+          return (<div key={k} style={{ flex: 1, background: bg+"22", border: "1px solid "+bg, borderRadius: 8, padding: "8px 0", textAlign: "center" }}>
+            <div style={{ fontSize: 10, color: clr+"99" }}>{label}</div>
+            <div style={{ fontSize: 20, fontWeight: 800, color: clr }}>{grouped[k].length}</div>
+          </div>);
+        })}
+      </div>
+      {[["pass","✅ 통과","#166534","#22c55e","#bbf7d0"],["review","⚠️ 검토","#713f12","#eab308","#fef08a"],["fail","❌ 제외","#7f1d1d","#ef4444","#fca5a5"]].map(function(arr) {
+        var key=arr[0],label=arr[1],bg=arr[2],badgeClr=arr[3],txtClr=arr[4];
+        return (<div key={key} style={{ marginBottom: 8 }}>
+          <button onClick={function(){setBulkExpanded(function(e){var n={...e};n[key]=!n[key];return n})}}
+            style={{ width: "100%", background: bg+"22", border: "1px solid "+bg, borderRadius: bulkExpanded[key] ? "6px 6px 0 0" : 6, padding: "8px 12px", cursor: "pointer", display: "flex", justifyContent: "space-between", alignItems: "center", color: txtClr }}>
+            <span style={{ fontWeight: 700, fontSize: 12 }}>{label} ({grouped[key].length}건)</span>
+            <span style={{ fontSize: 10 }}>{bulkExpanded[key] ? "▲" : "▼"}</span>
+          </button>
+          {bulkExpanded[key] && grouped[key].length > 0 && (
+            <div style={{ border: "1px solid "+bg, borderTop: "none", borderRadius: "0 0 6px 6px" }}>
+              {grouped[key].map(function(item, i) {
+                var d = item.data || {};
+                var kb = d.kbAppliedValue || d.kbMid || d.kbLow || d.housemuch || 0;
+                var dKey = key + "-" + i;
+                return (<div key={i} style={{ borderBottom: i < grouped[key].length - 1 ? "1px solid "+bg+"44" : "none" }}>
+                  <button onClick={function(){setBulkDetailOpen(function(o){var n={...o};n[dKey]=!n[dKey];return n})}}
+                    style={{ width: "100%", background: "transparent", border: "none", padding: "8px 12px", cursor: "pointer", textAlign: "left", color: "#e0dcd0" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      <span style={{ fontWeight: 700, fontSize: 13 }}>{d.name || "?"}</span>
+                      <span style={{ fontSize: 10, color: textMuted, background: navyMid, padding: "1px 5px", borderRadius: 3 }}>{d.type || ""}{d.rank && d.rank !== "불명" ? " "+d.rank : ""}</span>
+                      <span style={{ fontSize: 10, color: textMuted }}>{d.region || ""}</span>
+                      {kb > 0 && <span style={{ fontSize: 11, color: accent, fontWeight: 600 }}>{fmtW(kb)}</span>}
+                      {(d.flags||[]).indexOf("급건") >= 0 && <span style={{ fontSize: 9, background: "#7f1d1d", color: "#fca5a5", padding: "1px 4px", borderRadius: 2, fontWeight: 700 }}>급건</span>}
+                    </div>
+                    {d.summary && <div style={{ fontSize: 10, color: textMuted, marginTop: 2 }}>{d.summary}</div>}
+                    {item.reasons.length > 0 && <div style={{ fontSize: 10, color: badgeClr, marginTop: 2 }}>{item.reasons.join(" · ")}</div>}
+                  </button>
+                  {bulkDetailOpen[dKey] && (
+                    <div style={{ padding: "0 12px 10px", fontSize: 11, color: textMuted, lineHeight: 1.7 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "70px 1fr", gap: "2px 8px" }}>
+                        {d.name && <><span>신청인</span><span style={{color:"#e0dcd0"}}>{d.name}{d.birth ? " / "+d.birth : ""}{d.job ? " / "+d.job : ""}</span></>}
+                        {d.address && <><span>주소</span><span style={{color:"#e0dcd0",wordBreak:"break-all"}}>{d.address}</span></>}
+                        {kb > 0 && <><span>시세</span><span style={{color:"#e0dcd0"}}>{d.kbLow ? "KB하 "+num(d.kbLow)+"만" : ""}{d.kbMid ? " / 일 "+num(d.kbMid)+"만" : ""}{d.housemuch ? " 하우스머치 "+num(d.housemuch)+"만" : ""}</span></>}
+                        {d.seniorMaxTotal > 0 && <><span>선순위</span><span style={{color:"#e0dcd0"}}>최고액 {num(d.seniorMaxTotal)}만{d.seniorEstTotal ? " (잔액 "+num(d.seniorEstTotal)+"만)" : ""}</span></>}
+                        {d.replacementMaxTotal > 0 && <><span>대환대상</span><span style={{color:"#e0dcd0"}}>최고액 {num(d.replacementMaxTotal)}만</span></>}
+                        {(d.risks||[]).length > 0 && <><span>위험</span><span style={{color:"#ef4444"}}>{d.risks.join(", ")}</span></>}
+                        {(d.flags||[]).length > 0 && <><span>특이사항</span><span style={{color:"#e0dcd0"}}>{d.flags.join(", ")}</span></>}
+                      </div>
+                      {kb > 0 && (<div style={{ marginTop: 6, background: bg+"11", borderRadius: 4, padding: "6px 8px" }}>
+                        <div style={{ fontSize: 10, color: textMuted, marginBottom: 3, fontWeight: 600 }}>LTV 간이분석 (시세 {fmtW(kb)})</div>
+                        {[70,80,90].map(function(pct) {
+                          var limit = Math.floor(kb * pct / 100);
+                          var used = d.seniorMaxTotal || 0;
+                          var remain = limit - used;
+                          return (<div key={pct} style={{ display: "flex", gap: 6, fontSize: 10 }}>
+                            <span style={{ width: 32 }}>{pct}%</span>
+                            <span style={{ width: 60 }}>한도 {fmtW(limit)}</span>
+                            <span style={{ color: remain > 0 ? "#22c55e" : "#ef4444", fontWeight: 600 }}>{remain > 0 ? "+" : ""}{fmtW(remain)}</span>
+                          </div>);
+                        })}
+                      </div>)}
+                      <button onClick={function(){setKakaoText(item.raw);setMode("input");showToast("카톡 입력으로 이동")}}
+                        style={{ ...s.btnSecondary, marginTop: 8, fontSize: 11, padding: "5px 12px" }}>→ 상세분석으로 이동</button>
+                    </div>
+                  )}
+                </div>);
+              })}
+            </div>
+          )}
+        </div>);
+      })}
+    </div>)}
+  </>);
 }
