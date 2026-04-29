@@ -901,11 +901,9 @@ export default function Home() {
     if (!regText.trim()) { showToast("등기부 데이터가 없습니다"); return; }
     setAiParsing(true);
     try {
-      // 등기부에서 첫 장(표제부) + 마지막 장(요약)만 추출하여 AI에 전달
-      const summaryStart = regText.indexOf("주요 등기사항 요약") !== -1 ? regText.indexOf("주요 등기사항 요약") : regText.indexOf("주요등기사항");
-      const firstPage = regText.slice(0, Math.min(regText.indexOf("【 갑 구 】") || 1500, 1500));
-      const summaryPage = summaryStart > -1 ? regText.slice(summaryStart) : "";
-      const slimText = (firstPage + "\n---\n" + summaryPage).slice(0, 3000);
+      // ★ AI에는 요약 페이지만 전달 — 갑구/을구 본문은 절대 보내지 않음 (말소 혼동 방지)
+      const summaryIdx = regText.search(/주요\s*등기\s*사항\s*요약/);
+      const slimText = summaryIdx > -1 ? regText.slice(summaryIdx, summaryIdx + 1500) : regText.slice(0, 800);
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 9000);
