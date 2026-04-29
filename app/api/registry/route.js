@@ -39,13 +39,13 @@ export async function POST(req) {
 
     let hintBlock = "";
     if (hint) {
-      hintBlock = `\n\n사전 분석 결과 (이 정보를 반드시 참고해서 분석해):
-- 소유자: ${hint.owners || "미확인"} (${hint.ownership || ""})
-- 전용면적: ${hint.area || "미확인"}
-- 총층수: ${hint.totalFloors || "미확인"}
-- 해당층: ${hint.unitFloor || "미확인"}
+      hintBlock = `\n\n정규식 사전 분석 결과 (정확도 높음, 반드시 참고):
+- 소유자: ${hint.owners || "미확인"}
+- 소유권이전: ${hint.transferDate || "미확인"} ${hint.transferCause || ""} ${hint.tradePrice ? "거래가 " + hint.tradePrice : ""}
+- 전용면적: ${hint.area || "미확인"}, ${hint.totalFloors || "?"} / ${hint.unitFloor || "?"}
+- 갑구 상태: ${hint.gapgu || "미확인"}
+- 을구 상태: ${hint.eulgu || "미확인"}
 - 유효 근저당: ${hint.mortgages || "없음"}
-- 근저당 합계: ${hint.totalMax || "없음"}
 - 위험 플래그: ${hint.risks || "없음"}`;
     }
 
@@ -83,13 +83,13 @@ ${kb ? `시세: ${kb}` : ""}
 등기부:
 ${analysisText.slice(0, 3500)}`;
 
-    const models = ["gemini-2.5-pro", "gemini-2.5-flash"];
+    const models = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
     let lastErr = "";
 
     for (const model of models) {
       try {
         const controller = new AbortController();
-        const timeout = setTimeout(() => controller.abort(), 25000);
+        const timeout = setTimeout(() => controller.abort(), 9000);
 
         const res = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
