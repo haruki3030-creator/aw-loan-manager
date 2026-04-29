@@ -200,7 +200,10 @@ function parseKakao(raw) {
   if (!d.amount) { const revM = joined.match(/([\d,.]+)\s*(만|억)\s*(?:필요|부탁|요청|해주세요)/); if (revM) d.amount = revM[1].replace(/,/g, "") + revM[2]; }
   if (!d.amount && /최대\s*요청|추가.*한도|추가.*부탁|대납.*최대/.test(joined)) d.amount = joined.match(/((?:\d순위\s*)?(?:대납\s*)?최대\s*요청|추가.*한도.*부탁[가-힣]*)/)?.[1] || "최대 요청";
   if (!d.amount) { const reqM = joined.match(/((?:\d순위\s*)?가능사?\s*확인\s*부탁[가-힣]*)/); if (reqM) d.amount = reqM[1]; }
+  if (!d.amount) { const hdM = joined.match(/((?:\d순위\s*)?한도\s*요청)/); if (hdM) d.amount = hdM[1]; }
 
+  // URL 제거 (KB시세 링크 등은 특이사항에 넣지 않음)
+  
   // 직업
   for (const line of lines) { if (/^직업\s*[:\s]/.test(line)) { const m = line.match(/[:\s]+(.+)/); if (m) { d.job = m[1].trim(); break; } } }
   if (!d.job) { const jm = joined.match(/(4대\s*직장인|개인사업자|자영업자?|직장인|회사원|공무원|프리랜서|무직|주부|일용직|법인대표)/); if (jm) d.job = jm[1]; }
@@ -224,14 +227,17 @@ function parseKakao(raw) {
   const floorM = joined.match(/(\d+)\s*층\s*중\s*(\d+)\s*층/); if (floorM) notes.push(floorM[1] + "층 중 " + floorM[2] + "층");
   if (d.actualPrice && d.actualDate) notes.push("실거래 " + d.actualPrice.toLocaleString() + "만(" + d.actualDate + ")");
   else if (d.actualPrice) notes.push("실거래 " + d.actualPrice.toLocaleString() + "만");
-  if (/신탁/.test(joined)) notes.push("신탁");
+  if (/신탁/.test(joined) && !/신탁.*해제|귀속|말소/.test(joined)) notes.push("신탁");
   if (/환매/.test(joined)) notes.push("환매특약");
   const ageM = joined.match(/(\d+)\s*년차/); if (ageM) notes.push(ageM[1] + "년차");
-  const owM = joined.match(/소유권이전일?[:\s]*([\d년월일.\s]+)/); if (owM) notes.push("소유권이전 " + owM[1].trim());
+  const owM = joined.match(/소유권이전일?\s*[:\s]\s*(20[\d년월일.\s]+)/); if (owM) notes.push("소유권이전 " + owM[1].trim());
   if (/지분\s*대출|지분.*검토/.test(joined)) notes.push("지분대출 검토 요청");
   if (/배우자\s*공동/.test(joined)) notes.push("배우자 공동소유");
+  const kbNameM = joined.match(/KB상\s*물건지명[:\s]*([가-힣\d().\-]+)/); if (kbNameM) notes.push("KB: " + kbNameM[1]);
 
-  if (notes.length) d.special = (d.special ? d.special + " / " : "") + notes.join(" / ");
+  // URL 제거
+  const filtered = notes.filter(n => !/https?:\/\//.test(n) && !/kbland/.test(n));
+  if (filtered.length) d.special = (d.special ? d.special + " / " : "") + filtered.join(" / ");
   return d;
 }
 
@@ -423,11 +429,10 @@ function parseRegistry(rawText) {
     const rankMatch = summary.match(/순위번호\s*(\d+)/);
     if (rankMatch) {
       const ownerRank = parseInt(rankMatch[1]);
-      // 갑구 본문에서 해당 순위번호 블록 찾기 (더 유연한 패턴)
-      // PDF.js 추출 시 "12 소유권이전" 또는 "순위번호 12" 등 다양한 형태
+      // PDF.js 추출 시 "12\n소유권이전\n2024년11월27일\n...\n매매" 형태 (줄바꿈 다수)
       const patterns = [
-        new RegExp(`(?:순위번호\\s*)?${ownerRank}\\s+소유권이전\\s+(\\d{4}년\\s*\\d{1,2}월\\s*\\d{1,2}일)[\\s\\S]{0,200}?(매매|상속|증여|경매|강제경매로\\s*인한\\s*매각|신탁)`),
-        new RegExp(`${ownerRank}\\s+소유권이전[\\s\\S]*?(20\\d{2}년\\s*\\d{1,2}월\\s*\\d{1,2}일)[\\s\\S]{0,200}?(매매|상속|증여|경매)`),
+        new RegExp(`(?:^|\\n)${ownerRank}\\s*\\n?\\s*소유권이전[\\s\\S]{0,300}?(20\\d{2}년\\s*\\d{1,2}월\\s*\\d{1,2}일)[\\s\\S]{0,300}?(매매|상속|증여|경매|강제경매로\\s*인한\\s*매각|신탁)`, "m"),
+        new RegExp(`${ownerRank}[\\s\\n]+소유권이전[\\s\\S]*?(20\\d{2}년\\s*\\d{1,2}월\\s*\\d{1,2}일)[\\s\\S]{0,300}?(매매|상속|증여|경매)`, "m"),
       ];
       for (const pat of patterns) {
         const m = rawText.match(pat);
@@ -438,7 +443,7 @@ function parseRegistry(rawText) {
         }
       }
       // 거래가액
-      const pricePattern = new RegExp(`${ownerRank}\\s+소유권이전[\\s\\S]{0,500}?거래가액\\s*금?\\s*([\\d,]+)\\s*원`);
+      const pricePattern = new RegExp(`(?:^|\\n)${ownerRank}[\\s\\n]+소유권이전[\\s\\S]{0,500}?거래가액\\s*금?\\s*([\\d,]+)\\s*원`, "m");
       const priceM = rawText.match(pricePattern);
       if (priceM) r.tradePrice = Math.round(parseInt(priceM[1].replace(/,/g, "")) / 10000);
     }
@@ -491,9 +496,17 @@ function parseRegistry(rawText) {
   if (addrM) r.address = addrM[1].replace(/\s+/g, " ").trim();
   if (r.address.length > 120) r.address = r.address.slice(0, 120);
 
-  // 2-2. 도로명 주소
-  const doroM = rawText.match(/\[도로명주소\]\s*((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[가-힣\d\s\-.,()]+)/);
-  if (doroM) r.doroAddress = doroM[1].replace(/\s+/g, " ").trim();
+  // 2-2. 도로명 주소 (PDF 추출에서 층수 정보가 섞일 수 있음)
+  const doroIdx = rawText.indexOf("도로명주소");
+  if (doroIdx > -1) {
+    const doroBlock = rawText.slice(doroIdx, doroIdx + 300);
+    // 시/도 + ~길/로 + 번호 패턴 조합
+    const cityM = doroBlock.match(/((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주|충청북도|충청남도|경상북도|경상남도|전라북도|전라남도|강원특별자치도)[가-힣\s]*(?:시|군|구))/);
+    const roadM = doroBlock.match(/([가-힣]+(?:로|길)\s*\d+[가-힣\d\-]*)/);
+    if (cityM && roadM) {
+      r.doroAddress = (cityM[1] + " " + roadM[1]).replace(/\s+/g, " ").trim();
+    }
+  }
 
   // 2-3. 전용면적 (전유부분에서)
   const jeonyu = rawText.match(/전유부분의\s*건물의\s*표시[\s\S]*?(?=대지권|갑\s*구|$)/);
@@ -629,6 +642,11 @@ function mergeData(parsed, regParsed) {
   // 소유자
   if (regParsed.owners?.length > 0 && f.owners.length === 0) f.owners = regParsed.owners;
   if (!f.name && regParsed.owners?.length > 0) f.name = regParsed.owners[0].name;
+
+  // 도로명 주소를 보조 주소로 (지번과 다를 때만)
+  if (regParsed.doroAddress && !f.addressRegistry) {
+    f.addressRegistry = regParsed.doroAddress;
+  }
 
   // 물건 정보
   if (regParsed.area && !f.area) f.area = regParsed.area;
