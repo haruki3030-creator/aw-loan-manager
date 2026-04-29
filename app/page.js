@@ -571,6 +571,13 @@ export default function Home() {
       if (m.amount && /^\d+$/.test(m.amount) && parseInt(m.amount) > 100) m.amount = m.amount + "만";
       // 시세와 요청 혼동 체크: 시세 숫자가 요청으로 들어간 경우
       if (m.kb && m.amount && m.kb.replace(/[^\d]/g, "") === m.amount.replace(/[^\d]/g, "")) m.amount = "";
+      // AI가 못 잡은 빈 값을 정규식으로 보충
+      if (kakaoText.trim()) {
+        const regex = parseKakao(kakaoText);
+        for (const k of Object.keys(EMPTY)) {
+          if (!m[k] && regex[k]) m[k] = regex[k];
+        }
+      }
       setKakaoParsed(m);
       const merged2 = mergeData(m, regParsed); setMerged(merged2); setMode("review");
       showToast("AI 분석 완료!");
