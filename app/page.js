@@ -1099,6 +1099,19 @@ export default function Home() {
     return "";
   }
 
+  // 주소/단지명 OCR 오인식 교정
+  function fixOcrTypos(text) {
+    return text
+      .replace(/더숌/g, "더쉴")  // 숌→쉴
+      .replace(/더숄/g, "더쉴")
+      .replace(/더쉽/g, "더쉴")
+      .replace(/아이피크/g, "아이파크")
+      .replace(/래미인/g, "래미안")
+      .replace(/힐스데이트/g, "힐스테이트")
+      .replace(/푸르지오/g, "푸르지오")  // 이건 맞는데 유사형 대비
+      .replace(/이펀한/g, "이편한");
+  }
+
   // 면적 문자열에서 숫자 추출: "59.84㎡" → 59.84
   function parseArea(s) {
     if (!s) return 0;
@@ -1117,7 +1130,7 @@ export default function Home() {
         const d = new Date(now.getFullYear(), now.getMonth() - offset, 1);
         return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}`;
       });
-      const aptHint = extractAptName(address);
+      const aptHint = fixOcrTypos(extractAptName(address));
       const targetArea = parseArea(merged.area);
 
       const results = await Promise.all(months.map((ym) =>
@@ -1158,7 +1171,7 @@ export default function Home() {
 
   function openNaverSearch(address) {
     if (!address) { showToast("주소가 없습니다"); return; }
-    const aptHint = extractAptName(address);
+    const aptHint = fixOcrTypos(extractAptName(address));
     // 지역명 추출 (구/시 단위) → 정확도 향상
     const regionMatch = address.match(/([가-힣]+(?:특별시|광역시|특별자치시|도)?)\s*([가-힣]+(?:시|군|구))/);
     const region = regionMatch ? `${regionMatch[1].replace(/광역시|특별자치시|특별시/, "")} ${regionMatch[2]}`.trim() : "";
