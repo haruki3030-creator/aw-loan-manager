@@ -811,6 +811,8 @@ export default function Home() {
   const [priceData, setPriceData] = useState(null);
   const [priceLoading, setPriceLoading] = useState(false);
   const fileRef = useRef(null);
+  const kakaoFileRef = useRef(null);
+  const [kakaoFile, setKakaoFile] = useState(null);
   const [bulkText, setBulkText] = useState("");
   const [bulkResults, setBulkResults] = useState(null);
   const [bulkLoading, setBulkLoading] = useState(false);
@@ -820,6 +822,17 @@ export default function Home() {
   const [bulkDetailOpen, setBulkDetailOpen] = useState({});
 
   function showToast(msg) { setToast(msg); setTimeout(() => setToast(""), 2500); }
+
+  async function handleKakaoPdf(e) {
+    const file = e.target.files?.[0]; if (!file) return;
+    setLoading(true);
+    try {
+      const text = await extractPdfText(file);
+      setKakaoText(text); setKakaoFile(file.name);
+      showToast(`PDF 텍스트 추출 완료 (${file.name})`);
+    } catch (err) { showToast("PDF 오류: " + err.message); }
+    finally { setLoading(false); if (kakaoFileRef.current) kakaoFileRef.current.value = ""; }
+  }
 
   async function handlePdf(e) {
     const file = e.target.files?.[0]; if (!file) return;
@@ -973,7 +986,7 @@ export default function Home() {
   function handleCopy() {
     try { navigator.clipboard?.writeText(output).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); } catch { showToast("복사 실패"); }
   }
-  function handleReset() { setKakaoText(""); setRegText(""); setRegFile(null); setRegParsed(null); setMerged({ ...EMPTY, seniorLoans: [], replacementLoans: [], seniorTotal: { maxAmount: null, estimatedBalance: null }, replacementTotal: { maxAmount: null, estimatedBalance: null }, owners: [], mortgages: [], risks: [] }); setOutput(""); setAnalysis(""); setAiModel(""); setPriceData(null); setMode("input"); if (fileRef.current) fileRef.current.value = ""; }
+  function handleReset() { setKakaoText(""); setKakaoFile(null); setRegText(""); setRegFile(null); setRegParsed(null); setMerged({ ...EMPTY, seniorLoans: [], replacementLoans: [], seniorTotal: { maxAmount: null, estimatedBalance: null }, replacementTotal: { maxAmount: null, estimatedBalance: null }, owners: [], mortgages: [], risks: [] }); setOutput(""); setAnalysis(""); setAiModel(""); setPriceData(null); setMode("input"); if (fileRef.current) fileRef.current.value = ""; if (kakaoFileRef.current) kakaoFileRef.current.value = ""; }
   const set = (k) => (e) => setMerged({ ...merged, [k]: e.target.value });
   const TYPES = ["아파트", "빌라/다세대", "오피스텔", "단독/다가구", "상가", "토지", "기타"];
   const RANKS = ["1순위", "2순위", "3순위"];
@@ -1184,9 +1197,22 @@ export default function Home() {
         {/* === 접수입력 === */}
         {mode === "input" && (<>
           <div style={s.section}>◆ 카톡 내용 붙여넣기</div><div style={s.divider} />
-          <p style={{ fontSize: 12, color: textMuted, marginBottom: 10, lineHeight: 1.5 }}>업체에서 받은 카톡 메시지를 그대로 붙여넣으세요. AI가 자동 분석합니다.</p>
-          <textarea style={s.textarea} placeholder={"홍명선 / 770504\nKB 하 39,500만 / 일 43,000만 (일)\n▶ 선순위\n1. 우리은행 5,940만 (5,400만)\n▶ 대환/말소대상\n4. 더라이즈대부 3,900만\n..."} value={kakaoText} onChange={(e) => setKakaoText(e.target.value)} />
-          {kakaoText.trim() && <div style={{ fontSize: 12, color: "#7fdb7f", marginTop: 6 }}>✓ 카톡 데이터 입력됨</div>}
+          <p style={{ fontSize: 12, color: textMuted, marginBottom: 10, lineHeight: 1.5 }}>업체에서 받은 카톡 메시지를 붙여넣거나, PDF 파일을 업로드하세요.</p>
+          <input ref={kakaoFileRef} type="file" accept=".pdf" onChange={handleKakaoPdf} style={{ display: "none" }} />
+          <textarea style={s.textarea} placeholder={"홍명선 / 770504\nKB 하 39,500만 / 일 43,000만 (일)\n▶ 선순위\n1. 우리은행 5,940만 (5,400만)\n▶ 대환/말소대상\n4. 더라이즈대부 3,900만\n..."} value={kakaoText} onChange={(e) => { setKakaoText(e.target.value); if (e.target.value === "") setKakaoFile(null); }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+            {kakaoFile
+              ? <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, color: "#7fdb7f" }}>
+                  <span>✓ {kakaoFile}</span>
+                  <button onClick={() => { setKakaoFile(null); setKakaoText(""); if (kakaoFileRef.current) kakaoFileRef.current.value = ""; }} style={{ background: "rgba(255,80,80,0.15)", border: "1px solid rgba(255,80,80,0.4)", color: "#ff7b7b", borderRadius: 4, fontSize: 11, padding: "1px 7px", cursor: "pointer" }}>×</button>
+                </div>
+              : kakaoText.trim()
+                ? <div style={{ fontSize: 12, color: "#7fdb7f" }}>✓ 카톡 데이터 입력됨</div>
+                : null}
+            {loading && kakaoFile === null
+              ? null
+              : <button onClick={() => kakaoFileRef.current?.click()} style={{ marginLeft: "auto", background: "rgba(255,214,0,0.08)", border: "1px solid rgba(255,214,0,0.3)", color: "#ffd600", borderRadius: 4, fontSize: 11, padding: "4px 10px", cursor: "pointer" }}>📄 PDF 업로드</button>}
+          </div>
 
           <div style={{ ...s.section, marginTop: 24 }}>◆ 등기부등본 (선택)</div><div style={s.divider} />
           <input ref={fileRef} type="file" accept=".pdf" onChange={handlePdf} style={{ display: "none" }} />
