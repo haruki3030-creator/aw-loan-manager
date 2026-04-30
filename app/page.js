@@ -827,10 +827,29 @@ export default function Home() {
     const file = e.target.files?.[0]; if (!file) return;
     setLoading(true);
     try {
-      const text = await extractPdfText(file);
+      let text;
+      if (file.type === "application/pdf") {
+        text = await extractPdfText(file);
+      } else {
+        // 이미지 → Gemini Vision OCR
+        const base64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result.split(",")[1]);
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        const res = await fetch("/api/ocr", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ imageBase64: base64, mimeType: file.type }),
+        });
+        const data = await res.json();
+        if (data.error) throw new Error(data.error);
+        text = data.text;
+      }
       setKakaoText(text); setKakaoFile(file.name);
-      showToast(`PDF 텍스트 추출 완료 (${file.name})`);
-    } catch (err) { showToast("PDF 오류: " + err.message); }
+      showToast(`텍스트 추출 완료 (${file.name})`);
+    } catch (err) { showToast("파일 오류: " + err.message); }
     finally { setLoading(false); if (kakaoFileRef.current) kakaoFileRef.current.value = ""; }
   }
 
@@ -1198,7 +1217,7 @@ export default function Home() {
         {mode === "input" && (<>
           <div style={s.section}>◆ 카톡 내용 붙여넣기</div><div style={s.divider} />
           <p style={{ fontSize: 12, color: textMuted, marginBottom: 10, lineHeight: 1.5 }}>업체에서 받은 카톡 메시지를 붙여넣거나, PDF 파일을 업로드하세요.</p>
-          <input ref={kakaoFileRef} type="file" accept=".pdf" onChange={handleKakaoPdf} style={{ display: "none" }} />
+          <input ref={kakaoFileRef} type="file" accept=".pdf,.png,.jpg,.jpeg,.webp" onChange={handleKakaoPdf} style={{ display: "none" }} />
           <textarea style={s.textarea} placeholder={"홍명선 / 770504\nKB 하 39,500만 / 일 43,000만 (일)\n▶ 선순위\n1. 우리은행 5,940만 (5,400만)\n▶ 대환/말소대상\n4. 더라이즈대부 3,900만\n..."} value={kakaoText} onChange={(e) => { setKakaoText(e.target.value); if (e.target.value === "") setKakaoFile(null); }} />
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
             {kakaoFile
@@ -1211,7 +1230,7 @@ export default function Home() {
                 : null}
             {loading && kakaoFile === null
               ? null
-              : <button onClick={() => kakaoFileRef.current?.click()} style={{ marginLeft: "auto", background: "rgba(255,214,0,0.08)", border: "1px solid rgba(255,214,0,0.3)", color: "#ffd600", borderRadius: 4, fontSize: 11, padding: "4px 10px", cursor: "pointer" }}>📄 PDF 업로드</button>}
+              : <button onClick={() => kakaoFileRef.current?.click()} style={{ marginLeft: "auto", background: "rgba(255,214,0,0.08)", border: "1px solid rgba(255,214,0,0.3)", color: "#ffd600", borderRadius: 4, fontSize: 11, padding: "4px 10px", cursor: "pointer" }}>📄 PDF / 이미지 업로드</button>}
           </div>
 
           <div style={{ ...s.section, marginTop: 24 }}>◆ 등기부등본 (선택)</div><div style={s.divider} />
