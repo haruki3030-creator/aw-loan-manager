@@ -1642,6 +1642,53 @@ export default function Home() {
               </div>
             )}
 
+            {/* 차주 상황 해석 */}
+            {(() => {
+              const lines = [];
+              const reqAmt = merged.amount ? parseInt(merged.amount.replace(/[^\d]/g, "")) || 0 : 0;
+              const replEst = ltv.replacementEstTotal || 0;
+              const replMax = ltv.replacementMaxTotal || 0;
+              const seniorEst = ltv.seniorEstTotal || 0;
+              const salary = merged.salary ? parseInt(merged.salary.replace(/[^\d]/g, "")) || 0 : 0;
+              const replLenders = (merged.replacementLoans || []).map(l => l.lender || "").join(", ");
+              const isDebu업 = /대부|파이낸셜|캐피탈|저축은행/i.test(replLenders);
+
+              // 1. 대환 목적 판단
+              if (replEst > 0 && reqAmt > 0 && Math.abs(reqAmt - replEst) <= 500) {
+                lines.push(`• 요청금액(${num(reqAmt)}만)이 대환 잔액 합계(${num(replEst)}만)와 일치 → 신규 자금 수요 없이 기존 대출 전액 대환이 목적`);
+              } else if (replEst > 0 && reqAmt > 0 && reqAmt > replEst) {
+                lines.push(`• 대환 잔액(${num(replEst)}만) 외 추가 ${num(reqAmt - replEst)}만 신규 자금 수요 있음`);
+              } else if (replEst > 0) {
+                lines.push(`• 기존 대출(${num(replEst)}만) 대환 목적`);
+              }
+
+              // 2. 대환 대상이 대부업체인지
+              if (isDebu업 && replLenders) {
+                lines.push(`• 대환 대상(${replLenders})이 대부업체 — 고금리 부담 탈출 목적으로 판단`);
+              }
+
+              // 3. 소득 대비 이자 부담
+              if (salary > 0 && reqAmt > 0) {
+                const monthlyInterest = Math.round(reqAmt * 0.18 / 12);
+                const ratio = Math.round((monthlyInterest / salary) * 100);
+                const color = ratio <= 30 ? "#2ecc71" : ratio <= 50 ? "#f1c40f" : "#e74c3c";
+                lines.push(`• 월 소득 ${num(salary)}만 기준 예상 이자 ${num(monthlyInterest)}만 (소득 대비 ${ratio}%) — ${ratio <= 30 ? "무난" : ratio <= 50 ? "다소 부담" : "과중"}`);
+              }
+
+              // 4. 선순위 없는 순수 대환
+              if (seniorEst === 0 && replEst > 0) {
+                lines.push(`• 유지 선순위 없음 — 대환 완료 시 본 건이 1순위 설정`);
+              }
+
+              if (lines.length === 0) return null;
+              return (
+                <div style={{ background: "rgba(212,168,67,0.05)", border: "1px solid rgba(212,168,67,0.2)", borderRadius: 10, padding: 16, marginBottom: 16 }}>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: goldLight, marginBottom: 10 }}>🔍 차주 상황 해석</div>
+                  {lines.map((l, i) => <div key={i} style={{ fontSize: 12, color: "#e0dcd0", lineHeight: 1.8 }}>{l}</div>)}
+                </div>
+              );
+            })()}
+
             {/* AI 권리분석 */}
             {regText.trim() && (<>
               {!analysis ? (
