@@ -522,7 +522,7 @@ function parseRegistry(rawText) {
   const j = rawText.replace(/\s+/g, " ").trim();
 
   // 2-1. 주소 ([집합건물]에서)
-  const addrM = j.match(/\[집합건물\]\s*((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주)[^【]*?제?\d+호)/);
+  const addrM = j.match(/\[집합건물\]\s*((?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|경상북도|경상남도|전라북도|전라남도|충청북도|충청남도|강원특별자치도|강원도|제주특별자치도|제주)[^【]*?제?\d+호)/);
   if (addrM) r.address = addrM[1].replace(/\s+/g, " ").trim();
   if (r.address.length > 120) r.address = r.address.slice(0, 120);
 
