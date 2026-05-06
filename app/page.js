@@ -1093,6 +1093,7 @@ export default function Home() {
     const addr = address
       .replace(/광역시|특별자치시|특별자치도|특별시/g, "")
       .replace(/경상북도|경상남도|전라북도|전라남도|충청북도|충청남도|강원특별자치도|강원도|제주특별자치도|경기도|전라도|충청도/g, "")
+      .replace(/([가-힣]+)시\s+([가-힣]+[구군])/g, "$1 $2")
       .replace(/\s+/g, " ")
       .trim();
     const sorted = [...LAWD_MAP].sort((a, b) => b[0].length - a[0].length);
