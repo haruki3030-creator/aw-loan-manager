@@ -1198,7 +1198,13 @@ export default function Home() {
     const aptHint = fixOcrTypos(extractAptName(address));
     // 지역명 추출 (구/시 단위) → 정확도 향상
     const regionMatch = address.match(/([가-힣]+(?:특별시|광역시|특별자치시|도)?)\s*([가-힣]+(?:시|군|구))/);
-    const region = regionMatch ? `${regionMatch[1].replace(/특별자치도|특별자치시|광역시|특별시|도$/, "")} ${regionMatch[2]}`.trim() : "";
+    const regionRaw = regionMatch ? regionMatch[1] : "";
+    const regionShort = regionRaw
+      .replace("경상북도", "경북").replace("경상남도", "경남")
+      .replace("전라북도", "전북").replace("전라남도", "전남")
+      .replace("충청북도", "충북").replace("충청남도", "충남")
+      .replace(/특별자치도|특별자치시|광역시|특별시|도$/, "");
+    const region = regionMatch ? `${regionShort} ${regionMatch[2]}`.trim() : "";
     // 읍/면/동 추출 (검색 정확도 향상)
     const dongMatch = address.match(/([가-힣]+(?:읍|면|동|가))\s*\d/);
     const dong = dongMatch ? dongMatch[1] : "";
