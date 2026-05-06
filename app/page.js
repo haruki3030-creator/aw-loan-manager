@@ -1105,16 +1105,34 @@ export default function Home() {
   // 주소에서 단지명 추출: "논현동 749-1 논현센트럴뷰 제401동 제6층 제604호" → "논현센트럴뷰"
   function extractAptName(addr) {
     if (!addr) return "";
+    // 전처리: "외1필지", "외 1필지" 등 제거
+    const cleaned = addr.replace(/외\s*\d*\s*필지/g, "").replace(/\s+/g, " ");
     // 패턴1: 지번(123-45) 뒤 단지명 + 동
-    let m = addr.match(/\d+(?:-\d+)?\s+([가-힣A-Za-z0-9·]+(?:\s[가-힣A-Za-z0-9·]+)?)\s+제?\d+\s*동/);
-    if (m) return m[1].replace(/\s+/g, "");
+    let m = cleaned.match(/\d+(?:-\d+)?\s+([가-힣A-Za-z0-9·]+(?:\s[가-힣A-Za-z0-9·]+)?)\s+제?\d+\s*동/);
+    if (m) return m[1].replace(/아파트$/, "").replace(/\s+/g, "");
     // 패턴2: 동/호 직전 한글 단어
-    m = addr.match(/([가-힣A-Za-z0-9·]{3,})\s+(?:제\s*)?\d+\s*동\s*(?:제\s*)?\d+\s*층/);
-    if (m) return m[1];
+    m = cleaned.match(/([가-힣A-Za-z0-9·]{3,})\s+(?:제\s*)?\d+\s*동\s*(?:제\s*)?\d+\s*층/);
+    if (m) return m[1].replace(/아파트$/, "");
     // 패턴3: 알려진 브랜드 키워드 포함 단어
-    m = addr.match(/([가-힣A-Za-z0-9·]*(?:센트럴|자이|푸르지오|아이파크|래미안|힐스테이트|더샵|이편한|이안|롯데캐슬|위브|아너스|파크리오|한신|뷰|타운|마을|타워|팰리스|에이치|엘에이치)[가-힣A-Za-z0-9·]*)/);
-    if (m) return m[1];
+    m = cleaned.match(/([가-힣A-Za-z0-9·]*(?:센트럴|자이|푸르지오|아이파크|래미안|힐스테이트|더샵|더숌|더쉴|이편한|이안|롯데캐슬|위브|아너스|파크리오|한신|뷰|타운|마을|타워|팰리스|에이치|엘에이치|e편한|꿈에그린|동아|대림|현대|삼성|우성|주공|벽산|코오롱|두산|경남|SK|LG|GS)[가-힣A-Za-z0-9·]*)/);
+    if (m) return m[1].replace(/아파트$/, "");
+    // 패턴4: "OO아파트" 패턴 (최후 수단)
+    m = cleaned.match(/([가-힣A-Za-z0-9·]{2,}아파트)/);
+    if (m) return m[1].replace(/아파트$/, "");
     return "";
+  }
+
+  // 주소/단지명 OCR 오인식 교정
+  function fixOcrTypos(text) {
+    return text
+      .replace(/더숌/g, "더쉴")  // 숌→쉴
+      .replace(/더숄/g, "더쉴")
+      .replace(/더쉽/g, "더쉴")
+      .replace(/아이피크/g, "아이파크")
+      .replace(/래미인/g, "래미안")
+      .replace(/힐스데이트/g, "힐스테이트")
+      .replace(/푸르지오/g, "푸르지오")  // 이건 맞는데 유사형 대비
+      .replace(/이펀한/g, "이편한");
   }
 
   // 면적 문자열에서 숫자 추출: "59.84㎡" → 59.84
@@ -1135,7 +1153,7 @@ export default function Home() {
         const d = new Date(now.getFullYear(), now.getMonth() - offset, 1);
         return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}`;
       });
-      const aptHint = extractAptName(address);
+      const aptHint = fixOcrTypos(extractAptName(address));
       const targetArea = parseArea(merged.area);
 
       const results = await Promise.all(months.map((ym) =>
@@ -1176,7 +1194,7 @@ export default function Home() {
 
   function openNaverSearch(address) {
     if (!address) { showToast("주소가 없습니다"); return; }
-    const aptHint = extractAptName(address);
+    const aptHint = fixOcrTypos(extractAptName(address));
     // 지역명 추출 (구/시 단위) → 정확도 향상
     const regionMatch = address.match(/([가-힣]+(?:특별시|광역시|특별자치시|도)?)\s*([가-힣]+(?:시|군|구))/);
     const region = regionMatch ? `${regionMatch[1].replace(/광역시|특별자치시|특별시/, "")} ${regionMatch[2]}`.trim() : "";

@@ -1,5 +1,26 @@
 import { NextResponse } from "next/server";
 
+// 1글자 차이까지 허용하는 유사도 매칭 (OCR 오인식 대응)
+function fuzzyMatch(a, b) {
+  if (!a || !b) return false;
+  const short = a.length <= b.length ? a : b;
+  const long = a.length <= b.length ? b : a;
+  if (Math.abs(a.length - b.length) > 1) return false;
+  if (short.length < 2) return false;
+  let diff = 0;
+  if (a.length === b.length) {
+    for (let i = 0; i < a.length; i++) { if (a[i] !== b[i]) diff++; }
+    return diff <= 1;
+  }
+  // 길이 1 차이: 삽입/삭제
+  let i = 0, j = 0;
+  while (i < short.length && j < long.length) {
+    if (short[i] !== long[j]) { diff++; j++; } else { i++; j++; }
+    if (diff > 1) return false;
+  }
+  return true;
+}
+
 export async function POST(req) {
   try {
     const { lawdCd, dealYmd, targetArea, aptHint } = await req.json();
@@ -59,7 +80,8 @@ export async function POST(req) {
         if (item.cancel) continue;
         const aptKey = (item.aptNm || "").replace(/\s+/g, "");
         const areaOk = ta > 0 ? Math.abs(item.area - ta) <= 2 : true;
-        const aptOk = hint ? (aptKey.includes(hint) || hint.includes(aptKey)) : true;
+        // 단지명 매칭: 완전일치 또는 1글자 차이(오타/OCR 오인식 허용)
+        const aptOk = hint ? (aptKey.includes(hint) || hint.includes(aptKey) || fuzzyMatch(aptKey, hint)) : true;
         // hint가 있으면 단지+면적 둘 다 일치, hint 없으면 면적만 일치
         if (hint) {
           if (areaOk && aptOk) matched.push(item);
