@@ -1198,10 +1198,13 @@ export default function Home() {
     const aptHint = fixOcrTypos(extractAptName(address));
     // 지역명 추출 (구/시 단위) → 정확도 향상
     const regionMatch = address.match(/([가-힣]+(?:특별시|광역시|특별자치시|도)?)\s*([가-힣]+(?:시|군|구))/);
-    const region = regionMatch ? `${regionMatch[1].replace(/광역시|특별자치시|특별시/, "")} ${regionMatch[2]}`.trim() : "";
-    // 단지명 우선 + 지역 보조, 없으면 주소 일부
+    const region = regionMatch ? `${regionMatch[1].replace(/광역시|특별자치시|특별시|도$/, "")} ${regionMatch[2]}`.trim() : "";
+    // 읍/면/동 추출 (검색 정확도 향상)
+    const dongMatch = address.match(/([가-힣]+(?:읍|면|동|가))\s*\d/);
+    const dong = dongMatch ? dongMatch[1] : "";
+    // 단지명 우선 + 지역+동 보조, 없으면 주소 일부
     const keyword = aptHint
-      ? (region ? `${region} ${aptHint}` : aptHint)
+      ? (region ? `${region}${dong ? " " + dong : ""} ${aptHint}` : aptHint)
       : address.split(/제?\d+\s*동/)[0].trim();
     const url = `https://m.land.naver.com/search/result/${encodeURIComponent(keyword)}`;
     window.open(url, "_blank", "noopener,noreferrer");
