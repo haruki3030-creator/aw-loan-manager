@@ -1755,7 +1755,7 @@ function BulkTab({ bulkText, setBulkText, bulkResults, setBulkResults, bulkLoadi
     // 4. "===" 또는 "---" 구분선
     var headerPatterns = [
       /^\[모든\]/,
-      /^\[[가-힣A-Za-z0-9\s_·]+\]\s*\[\s*(?:오전|오후)?\s*\d{1,2}:\d{2}\s*\]/,
+      /^\[[^\]]+\]\s*\[\s*(?:오전|오후)?\s*\d{1,2}:\d{2}\s*\]/,
       /^\d{4}[.년]\s*\d{1,2}[.월]\s*\d{1,2}[.일]?\s*(?:오전|오후)?\s*\d{1,2}:\d{2}\s*[,，]?\s*[가-힣A-Za-z]+\s*:/,
       /^[=]{3,}\s*$/,
       /^[-]{3,}\s*$/,
@@ -1767,7 +1767,7 @@ function BulkTab({ bulkText, setBulkText, bulkResults, setBulkResults, bulkLoadi
     function stripHeader(s) {
       return s
         .replace(/^\[모든\]\s*\[[\s\S]*?\]\s*/, "")
-        .replace(/^\[[가-힣A-Za-z0-9\s_·]+\]\s*\[\s*(?:오전|오후)?\s*\d{1,2}:\d{2}\s*\]\s*/, "")
+        .replace(/^\[[^\]]+\]\s*\[\s*(?:오전|오후)?\s*\d{1,2}:\d{2}\s*\]\s*/, "")
         .replace(/^\d{4}[.년]\s*\d{1,2}[.월]\s*\d{1,2}[.일]?\s*(?:오전|오후)?\s*\d{1,2}:\d{2}\s*[,，]?\s*[가-힣A-Za-z]+\s*:\s*/, "")
         .replace(/^[=\-]{3,}\s*/, "")
         .trim();
@@ -1790,7 +1790,7 @@ function BulkTab({ bulkText, setBulkText, bulkResults, setBulkResults, bulkLoadi
     }
     if (current.trim()) blocks.push(current.trim());
 
-    var SIDO = /서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주|충청|전라|경상/;
+    var SIDO = /서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주|충청|전라|경상|강화군|김포|고양|남양주|성남|수원|용인|하남|구리|광명|부천|안양|시흥|안산|화성|평택|의정부|파주/;
 
     // 폴백: 분리 안 됐는데 한 덩이가 명백히 여러 건이면 SIDO+주민번호 패턴으로 재분리
     if (blocks.length <= 1 && raw.trim()) {
@@ -1816,11 +1816,21 @@ function BulkTab({ bulkText, setBulkText, bulkResults, setBulkResults, bulkLoadi
     }
 
     var deals = [], pendingMemo = "";
+    // 짧은 잡담/ACK/한도답변은 메모로 끌고 가지 않음. 메모는 ★ 표시나 긴 사전 정보만.
+    function isMemoCandidate(b) {
+      var t = b.replace(/\s+/g, " ").trim();
+      if (t.length < 40) return false;                                 // 짧으면 메모 아님
+      if (/^[가-힣]{2,4}.{0,20}[\d,]+\s*(만원|만|억|천).{0,15}(가능|불가|입니다)/.test(t)) return false;
+      if (/^(통화|확인|감사|진행|안된|네|넵)/.test(t)) return false;
+      return true;
+    }
     function hasDealMarker(b) {
       return /\[(?:아파트|빌라|연립|다세대|빌라연립다세대|오피스텔|주상복합|단독|다가구|도생|도시형|재건축)/.test(b)
-        || (SIDO.test(b) && /시세|kb|KB|기대출|선순위|순위|근저당|대출|한도|대환/i.test(b))
+        || (SIDO.test(b) && /시세|kb|KB|기대출|선순위|순위|근저당|대출|한도|대환|필요|연봉|감정가|낙찰가|매각|전용|면적|nice|NICE|나이스/i.test(b))
         || (/[가-힣]{2,4}\s*[\/\s]\s*\d{6}/.test(b) && SIDO.test(b))
-        || /\d{6}\s*[-]\s*[1-49]/.test(b);
+        || /\d{6}\s*[-]\s*[1-49]/.test(b)
+        || (/필요\s*\d{3,}/.test(b) && /\d{2,3}\s*평|m²|면적|전용/.test(b))
+        || (/감정가\s*[\d,]+/.test(b) && /낙찰|사건번호|타경/.test(b));
     }
     for (var bi = 0; bi < blocks.length; bi++) {
       var block = blocks[bi];
@@ -1832,7 +1842,10 @@ function BulkTab({ bulkText, setBulkText, bulkResults, setBulkResults, bulkLoadi
       if (isDeal) {
         deals.push(pendingMemo ? pendingMemo + "\n" + block : block);
         pendingMemo = "";
-      } else { pendingMemo = block; }
+      } else if (isMemoCandidate(block)) {
+        pendingMemo = block;
+      }
+      // 그 외 짧은 ACK/잡담은 무시
     }
     // 분류된 deal 0건이면 전체를 1건으로 처리 (기존 동작 보존)
     if (deals.length === 0 && blocks.length > 0) deals.push(blocks.join("\n").trim());
