@@ -38,6 +38,10 @@ export async function POST(req) {
 - "kb:51000" → kbMid:51000
 - "KB 미등재 하우스머치 중 43,600" → housemuch:43600
 - "KB AI시세 15,400 15,600 15,700" → kbLow:15400, kbMid:15600
+- "매물평균가 4억 8,600만" / "네이버평균 5.2억" / "일사천리 3억9천" → kbAppliedValue로 (만원 단위)
+- "X억 Y만" 표기는 X*10000+Y 만원으로. 예: "4억 8,600만"=48600, "1억"=10000, "5.2억"=52000
+- 시세가 KB·하우스머치·매물평균가 어디에도 없고 숫자만 3개 나열되면(예: "60,000  65,000  69,000") kbLow/kbMid/kbAppliedValue 순서로 매핑
+- "시세 1억" / "시세 1.2억" 같은 단일값은 kbAppliedValue에 (만원 단위)
 - 선순위: 총 합계의 채권최고액/추정잔액. 없으면 개별 합산
 - 대환/말소대상은 replacementMaxTotal/replacementEstTotal
 - risks: ["압류","가압류","경매","신탁","환매특약"] 해당 시
@@ -65,7 +69,7 @@ ${text.slice(0, 2500)}`;
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               contents: [{ parts: [{ text: prompt }] }],
-              generationConfig: { temperature: 0, maxOutputTokens: 800, thinkingConfig: { thinkingBudget: 0 } },
+              generationConfig: { temperature: 0, maxOutputTokens: 1200, thinkingConfig: { thinkingBudget: 0 } },
             }),
             signal: controller.signal,
           }
