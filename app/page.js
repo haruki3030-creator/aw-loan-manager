@@ -1816,13 +1816,10 @@ function BulkTab({ bulkText, setBulkText, bulkResults, setBulkResults, bulkLoadi
     }
 
     var deals = [], pendingMemo = "";
-    // 짧은 잡담/ACK/한도답변은 메모로 끌고 가지 않음. 메모는 ★ 표시나 긴 사전 정보만.
-    function isMemoCandidate(b) {
-      var t = b.replace(/\s+/g, " ").trim();
-      if (t.length < 40) return false;                                 // 짧으면 메모 아님
-      if (/^[가-힣]{2,4}.{0,20}[\d,]+\s*(만원|만|억|천).{0,15}(가능|불가|입니다)/.test(t)) return false;
-      if (/^(통화|확인|감사|진행|안된|네|넵)/.test(t)) return false;
-      return true;
+    // 메모는 오직 ★/■/▣ 같은 명시적 마커가 있는 블록만 prepend. 그 외 모든 비-deal 블록은 폐기.
+    // (이전: 잡담·다른 진행건 보고가 다음 deal 앞에 prepend되어 Gemini가 이름을 잘못 추출하는 문제)
+    function isExplicitMemo(b) {
+      return /^[★■▣▶◆◇※]/.test(b.trim());
     }
     function hasDealMarker(b) {
       return /\[(?:아파트|빌라|연립|다세대|빌라연립다세대|오피스텔|주상복합|단독|다가구|도생|도시형|재건축)/.test(b)
@@ -1842,10 +1839,10 @@ function BulkTab({ bulkText, setBulkText, bulkResults, setBulkResults, bulkLoadi
       if (isDeal) {
         deals.push(pendingMemo ? pendingMemo + "\n" + block : block);
         pendingMemo = "";
-      } else if (isMemoCandidate(block)) {
+      } else if (isExplicitMemo(block)) {
         pendingMemo = block;
       }
-      // 그 외 짧은 ACK/잡담은 무시
+      // 그 외 모든 비-deal 블록(잡담·진행통지·한도답변)은 폐기
     }
     // 분류된 deal 0건이면 전체를 1건으로 처리 (기존 동작 보존)
     if (deals.length === 0 && blocks.length > 0) deals.push(blocks.join("\n").trim());
